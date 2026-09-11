@@ -1,0 +1,51 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
+
+env:
+    CARGO_TERM_COLOR: always
+    CARGO_INCREMENTAL: 0
+
+jobs:
+    check:
+        name: fmt, clippy, doc, test, package
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v7
+
+            # Installs the channel and components pinned in rust-toolchain.toml and
+            # caches ~/.cargo and target/. rustflags is cleared so the build matches
+            # a local `cargo` run; clippy sets -D warnings explicitly below.
+            - uses: actions-rust-lang/setup-rust-toolchain@v1
+              with:
+                  rustflags: ''
+
+            - name: cargo fmt --check
+              run: cargo fmt --all -- --check
+
+            - name: cargo clippy
+              run: cargo clippy --all-targets --all-features -- -D warnings
+
+            # Guards the docs.rs build: a rustdoc failure cannot be fixed by
+            # republishing the same version.
+            - name: cargo doc
+              run: cargo doc --all-features --no-deps
+              env:
+                  RUSTDOCFLAGS: -D warnings
+
+            - name: cargo test
+              run: cargo test --all-features
+
+            # --locked: the committed Cargo.lock must already be up to date.
+            - name: cargo publish --dry-run
+              run: cargo publish --dry-run --locked

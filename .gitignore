@@ -1,0 +1,4 @@
+# Cargo.lock is committed on purpose: CI must resolve exactly the dependency
+# versions each release was tested against.
+target/
+.DS_Store

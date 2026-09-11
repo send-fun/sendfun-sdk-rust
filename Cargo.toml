@@ -1,0 +1,89 @@
+[package]
+name = "sendfun-sdk"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Rust SDK for send.fun programs"
+license = "MIT"
+repository = "https://github.com/send-fun/sendfun-sdk-rust"
+homepage = "https://send.fun"
+documentation = "https://docs.rs/sendfun-sdk"
+readme = "README.md"
+keywords = ["solana", "send", "launchpad", "dex", "sdk"]
+categories = ["cryptography::cryptocurrencies", "api-bindings"]
+exclude = [".github/", "clippy.toml", "rustfmt.toml", "rust-toolchain.toml"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+anchor-lang = { version = "1.1.2", optional = true }
+borsh = "1"
+num-derive = "^0.4"
+num-traits = "^0.2"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_with = { version = "^3.0", optional = true }
+solana-account = { version = "^3", optional = true }
+solana-address = { version = "^2.2", features = ["borsh", "copy", "curve25519", "decode"] }
+solana-instruction = "^3"
+solana-program = "^3"
+solana-rpc-client = { version = "^3", optional = true }
+solana-sha256-hasher = { version = "^3", features = ["sha2"] }
+thiserror = "^2"
+
+[dev-dependencies]
+sha2 = "0.10"
+
+[features]
+default = []
+anchor = ["dep:anchor-lang"]
+fetch = ["dep:solana-rpc-client", "dep:solana-account"]
+serde = ["dep:serde", "dep:serde_with"]
+
+[lints.rust]
+missing_docs = "allow"
+unused_crate_dependencies = "warn"
+unfulfilled_lint_expectations = "deny"
+dead_code = "allow"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cognitive_complexity = "allow"
+cargo_common_metadata = "allow"
+missing_errors_doc = "allow"
+too_many_lines = "allow"
+await_holding_lock = "deny"
+multiple_crate_versions = "allow"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+negative_feature_names = "allow"
+mod_module_files = "warn"
+undocumented_unsafe_blocks = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+print_stdout = "deny"
+dbg_macro = "deny"
+wildcard_imports = "allow"
+indexing_slicing = "warn"
+clone_on_ref_ptr = "warn"
+needless_pass_by_value = "allow"
+unnecessary_wraps = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+mem_forget = "deny"
+arithmetic_side_effects = "warn"
+
+# Not a workspace member: the empty table keeps cargo from adopting an
+# enclosing workspace when this tree is built inside one.
+[workspace]

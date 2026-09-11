@@ -1,0 +1,41 @@
+# clippy.toml - Solana Anchor 1.0 best practices
+
+# Thresholds - Solana ecosystem standard
+too-many-arguments-threshold = 3 # Args structs keep instructions clean
+enum-variant-size-threshold = 200 # Anchor errors can be large
+
+# Allow unwrap/expect/panic in tests (Cargo.toml denies globally - this exempts tests)
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# Disallowed types for on-chain determinism
+disallowed-types = [
+	{ path = "std::collections::HashMap", reason = "Non-deterministic iteration order breaks consensus; use BTreeMap" },
+	# HashSet: Anchor v1 uses it internally in macro-generated code for dup account checks.
+	# Our code should still prefer BTreeSet for on-chain state.
+	# { path = "std::collections::HashSet", reason = "Non-deterministic; use BTreeSet" },
+	{ path = "std::sync::Mutex", reason = "Threading unavailable in BPF runtime" },
+	{ path = "std::sync::RwLock", reason = "Threading unavailable in BPF runtime" },
+	{ path = "std::sync::Arc", reason = "Threading unavailable in BPF runtime; runtime handles parallelism" },
+]
+
+# Disallowed methods for on-chain safety (BPF sandbox restrictions)
+disallowed-methods = [
+	{ path = "std::env::var", reason = "Environment variables unavailable on-chain" },
+	{ path = "std::env::vars", reason = "Environment variables unavailable on-chain" },
+	{ path = "std::fs::read", reason = "Filesystem unavailable on-chain" },
+	{ path = "std::fs::write", reason = "Filesystem unavailable on-chain" },
+	{ path = "std::thread::spawn", reason = "Threading unavailable on-chain" },
+	{ path = "std::time::Instant::now", reason = "Use Clock sysvar instead" },
+	{ path = "std::time::SystemTime::now", reason = "Use Clock sysvar instead" },
+	{ path = "std::net::TcpStream::connect", reason = "Network operations unavailable on-chain" },
+	{ path = "std::process::Command::new", reason = "Process spawning unavailable on-chain" },
+	{ path = "core::result::Result::unwrap_or", reason = "Use .map_err(|_| Error)? for proper error propagation instead of silent fallbacks" },
+]
+
+# Disallowed macros for platform programs
+disallowed-macros = [
+	{ path = "anchor_lang::emit", reason = "Use emit_cpi!() for CPI-safe event emission (indexer-visible)" },
+]
