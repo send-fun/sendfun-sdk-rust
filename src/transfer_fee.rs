@@ -19,6 +19,8 @@ const ACCOUNT_TYPE_MINT: u8 = 1;
 
 const TLV_START: usize = 166;
 
+const TLV_TYPE_LEN: usize = 2;
+
 const TLV_HEADER_LEN: usize = 4;
 
 const UNINITIALIZED_TYPE: u16 = 0;
@@ -121,20 +123,20 @@ fn read_config(payload: &[u8]) -> Option<TransferFeeConfig> {
 	})
 }
 
-/// `Ok(None)` only without the extension. A 0 bps config stays `Some`: its
-/// rate can rise, and a leg grossed up as fee-free fails the program's bound.
-pub fn decode_transfer_fee_config(
-	data: &[u8],
+/// `(type, payload)` in account order; empty for an SPL mint. Every entry up to
+/// the first zero type, or a tail too short for one, must be whole.
+pub fn mint_extensions<'a>(
+	data: &'a [u8],
 	owner: &Address,
-) -> Result<Option<TransferFeeConfig>, TransferFeeDecodeError> {
+) -> Result<Vec<(u16, &'a [u8])>, TransferFeeDecodeError> {
 	if owner == &TOKEN_PROGRAM_ID {
-		return Ok(None);
+		return Ok(Vec::new());
 	}
 	if owner != &TOKEN_2022_PROGRAM_ID {
 		return Err(TransferFeeDecodeError::UnknownOwner);
 	}
 	if data.len() == MINT_BASE_LEN {
-		return Ok(None);
+		return Ok(Vec::new());
 	}
 	if data.len() < TLV_START {
 		return Err(TransferFeeDecodeError::Malformed);
@@ -144,23 +146,29 @@ pub fn decode_transfer_fee_config(
 		return Err(TransferFeeDecodeError::Malformed);
 	}
 
+	let mut extensions = Vec::new();
 	let mut offset = TLV_START;
 	while offset < data.len() {
+		let type_end = offset
+			.checked_add(TLV_TYPE_LEN)
+			.ok_or(TransferFeeDecodeError::Malformed)?;
+		// Too short for a type, or a zero type: trailing slack, as SPL reads it.
+		let Some(&[type_low, type_high]) = data.get(offset..type_end) else {
+			break;
+		};
+		let extension_type = u16::from_le_bytes([type_low, type_high]);
+		if extension_type == UNINITIALIZED_TYPE {
+			break;
+		}
+
 		let header_end = offset
 			.checked_add(TLV_HEADER_LEN)
 			.ok_or(TransferFeeDecodeError::Malformed)?;
-		// A cut header is malformed, not "no fee".
-		let Some(&[type_low, type_high, length_low, length_high]) =
-			data.get(offset..header_end)
+		// A set type with a cut length is malformed, not the end of the list.
+		let Some(&[length_low, length_high]) = data.get(type_end..header_end)
 		else {
 			return Err(TransferFeeDecodeError::Malformed);
 		};
-
-		let extension_type = u16::from_le_bytes([type_low, type_high]);
-		// Trailing rent-exempt slack reads as type 0: no further entries.
-		if extension_type == UNINITIALIZED_TYPE {
-			return Ok(None);
-		}
 
 		let length = usize::from(u16::from_le_bytes([length_low, length_high]));
 		let payload_end = header_end
@@ -169,17 +177,26 @@ pub fn decode_transfer_fee_config(
 		let payload = data
 			.get(header_end..payload_end)
 			.ok_or(TransferFeeDecodeError::Malformed)?;
-
-		if extension_type == TRANSFER_FEE_CONFIG_TYPE {
-			return read_config(payload)
-				.map(Some)
-				.ok_or(TransferFeeDecodeError::Malformed);
-		}
-
+		extensions.push((extension_type, payload));
 		offset = payload_end;
 	}
 
-	Ok(None)
+	Ok(extensions)
+}
+
+/// `Ok(None)` only without the extension. A 0 bps config stays `Some`: its
+/// rate can rise, and a leg grossed up as fee-free fails the program's bound.
+pub fn decode_transfer_fee_config(
+	data: &[u8],
+	owner: &Address,
+) -> Result<Option<TransferFeeConfig>, TransferFeeDecodeError> {
+	mint_extensions(data, owner)?
+		.into_iter()
+		.find(|(extension_type, _)| *extension_type == TRANSFER_FEE_CONFIG_TYPE)
+		.map(|(_, payload)| {
+			read_config(payload).ok_or(TransferFeeDecodeError::Malformed)
+		})
+		.transpose()
 }
 
 /// Mirrors SPL's `get_epoch_fee`.
@@ -428,5 +445,48 @@ mod tests {
 				maximum_fee: NEWER.maximum_fee,
 			}))
 		);
+	}
+
+	#[test]
+	fn mint_extensions_lists_every_entry_in_order() {
+		let mut entries = other_extensions();
+		entries.insert(1, (TRANSFER_FEE_CONFIG_TYPE, default_fee_payload()));
+		let mut image = tlv_image(&entries);
+		image.extend(core::iter::repeat_n(0_u8, 64));
+
+		let extensions =
+			mint_extensions(&image, &TOKEN_2022_PROGRAM_ID).unwrap();
+		let expected: Vec<(u16, &[u8])> = entries
+			.iter()
+			.map(|(extension_type, payload)| {
+				(*extension_type, payload.as_slice())
+			})
+			.collect();
+		assert_eq!(extensions, expected);
+		assert_eq!(mint_extensions(&image, &TOKEN_PROGRAM_ID), Ok(Vec::new()));
+	}
+
+	/// SPL's walk ends on a tail too short for a type, or on a zero type too
+	/// short for a length: a mint whose extensions total `Multisig::LEN` is
+	/// allocated two bytes past them.
+	#[test]
+	fn a_short_zero_tail_ends_the_walk() {
+		for tail in 1..TLV_HEADER_LEN {
+			let mut image =
+				tlv_image(&[(TRANSFER_FEE_CONFIG_TYPE, default_fee_payload())]);
+			image.extend(core::iter::repeat_n(0_u8, tail));
+
+			assert_eq!(decode(&image), Ok(expected()), "tail of {tail}");
+		}
+	}
+
+	/// Every entry must be whole, including those after the fee config.
+	#[test]
+	fn a_cut_entry_after_the_config_is_malformed() {
+		let mut image =
+			tlv_image(&[(TRANSFER_FEE_CONFIG_TYPE, default_fee_payload())]);
+		image.extend_from_slice(&[18, 0, 64, 0]);
+
+		assert_eq!(decode(&image), Err(TransferFeeDecodeError::Malformed));
 	}
 }

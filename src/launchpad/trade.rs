@@ -110,7 +110,8 @@ pub fn buy_exact_out(
 		partner: p.partner,
 		platform_config: p.platform_config,
 		quote_token_program: p.quote_token_program,
-		amount_out: p.base_amount,
+		// Capped at the supply left. The program reverts a short fill.
+		amount_out: q.base_to_user,
 		max_amount_in: max_quote_in,
 	});
 	Ok((ix, q))
@@ -396,16 +397,17 @@ mod tests {
 
 	use super::{
 		BuildBuyExactInParams, BuildBuyExactOutParams, BuildSellExactInParams,
-		BuildSellExactOutParams, BuyExactInParams,
+		BuildSellExactOutParams, BuyExactInParams, BuyExactOutParams,
 		build_buy_exact_in_instruction, build_buy_exact_out_instruction,
 		build_sell_exact_in_instruction, build_sell_exact_out_instruction,
-		buy_exact_in,
+		buy_exact_in, buy_exact_out,
 	};
 	use crate::constants::{
 		TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, WSOL_MINT,
 	};
 	use crate::launchpad::events::TradeEvent;
 	use crate::launchpad::types::TradeDirection;
+	use crate::math::amm::MintFee;
 
 	const BONDING_CURVE_INDEX: usize = 2;
 	const BASE_VAULT_INDEX: usize = 5;
@@ -603,5 +605,67 @@ mod tests {
 		assert_eq!(args.amount_in, 1_000_000_000);
 		// 31_945_788_964_181 * 9_900 / 10_000, floored.
 		assert_eq!(args.min_amount_out, 31_626_331_074_539);
+	}
+
+	fn signed_buy_exact_out(
+		real_base_reserves: u64,
+		base_fee: Option<MintFee>,
+		base_amount: u64,
+	) -> (u64, crate::math::amm::BuyQuote) {
+		let (ix, quote) = buy_exact_out(&BuyExactOutParams {
+			user: &USER,
+			payer: None,
+			base_mint: &BASE_MINT,
+			quote_mint: &WSOL_MINT,
+			virtual_base_reserves: 1_000_000_000_000_000,
+			virtual_quote_reserves: 30_000_000_000,
+			fee_bps: 100,
+			slippage_bps: 100,
+			partner: &PARTNER,
+			platform_config: &PLATFORM_CONFIG,
+			quote_token_program: &TOKEN_PROGRAM_ID,
+			quote_fee: None,
+			base_fee,
+			real_base_reserves,
+			base_amount,
+		})
+		.unwrap();
+		assert_eq!(
+			ix.data[..8],
+			crate::launchpad::instructions::BUY_EXACT_OUT_DISCRIMINATOR
+		);
+		let args = <crate::launchpad::instructions::BuyExactOutInstructionArgs as borsh::BorshDeserialize>::try_from_slice(&ix.data[8..]).unwrap();
+		(args.amount_out, quote)
+	}
+
+	#[test]
+	fn buy_exact_out_signs_an_uncapped_request_unchanged() {
+		let (amount_out, quote) =
+			signed_buy_exact_out(500_000_000_000_000, None, 10_000_000_000);
+		assert_eq!(quote.base_to_user, 10_000_000_000);
+		assert_eq!(amount_out, 10_000_000_000);
+	}
+
+	#[test]
+	fn buy_exact_out_clamps_a_request_over_the_supply_left() {
+		let (amount_out, quote) =
+			signed_buy_exact_out(1_000_000_000, None, 5_000_000_000);
+		assert_eq!(quote.base_to_user, 1_000_000_000);
+		assert_eq!(amount_out, 1_000_000_000);
+	}
+
+	#[test]
+	fn buy_exact_out_clamps_to_the_net_under_a_base_transfer_fee() {
+		let (amount_out, quote) = signed_buy_exact_out(
+			1_000_000_000,
+			Some(MintFee {
+				bps: 20,
+				maximum_fee: u64::MAX,
+			}),
+			5_000_000_000,
+		);
+		assert_eq!(quote.base_amount, 1_000_000_000);
+		assert_eq!(quote.base_to_user, 998_000_000);
+		assert_eq!(amount_out, 998_000_000);
 	}
 }
