@@ -41,3 +41,7 @@ pub use self::r#reward_state::*;
 pub use self::r#staking_config::*;
 pub use self::r#user_reward_debt::*;
 pub use self::r#user_stake_position::*;
+
+/// The system program, which owns an address not created yet that someone sent lamports to.
+pub(crate) const SYSTEM_PROGRAM_ID: solana_address::Address =
+	solana_address::Address::new_from_array([0; 32]);

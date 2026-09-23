@@ -1,7 +1,6 @@
 pub(crate) mod generated;
 
 pub use crate::constants::NEXUS_PROGRAM_ID as ID;
-pub use generated::shared;
 pub use generated::{accounts, errors, events, instructions, types};
 
 pub mod pda;
@@ -14,8 +13,9 @@ impl types::LaunchpadFees {
 		self.protocol_fee_bps.checked_add(self.creator_fee_bps)
 	}
 
-	/// `total_fee_bps` plus the decay premium from the market's `created_at`;
-	/// times in unix seconds.
+	/// `total_fee_bps` plus the fee decay premium at `now`. `created_at` is the
+	/// market's creation time. Both times are Unix seconds. `None` on overflow
+	/// or on a negative time.
 	#[must_use]
 	pub fn effective_fee_bps(&self, created_at: i64, now: i64) -> Option<u16> {
 		let standard_fee_bps = self.total_fee_bps()?;
@@ -41,8 +41,9 @@ impl types::DexFees {
 		}
 	}
 
-	/// `total_fee_bps` plus the decay premium from the market's `created_at`;
-	/// times in unix seconds.
+	/// `total_fee_bps` plus the fee decay premium at `now`. `created_at` is the
+	/// market's creation time. Both times are Unix seconds. `None` on overflow
+	/// or on a negative time.
 	#[must_use]
 	pub fn effective_fee_bps(&self, created_at: i64, now: i64) -> Option<u16> {
 		let standard_fee_bps = self.total_fee_bps()?;

@@ -2,14 +2,15 @@ use crate::constants::{
 	ATA_PROGRAM_ID, DEX_PROGRAM_ID, LAUNCHPAD_PROGRAM_ID, NEXUS_PROGRAM_ID,
 	SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
 };
-use crate::launchpad::accounts::BondingCurve;
 use solana_address::Address;
 
 #[derive(Clone, Debug)]
 pub struct BuildMigrateParams<'a> {
 	pub caller: &'a Address,
-	pub curve: &'a BondingCurve,
-	pub curve_key: &'a Address,
+	pub base_mint: &'a Address,
+	pub quote_mint: &'a Address,
+	/// `BondingCurve::creator_fee_config`. `migrate` refuses any other account.
+	pub creator_fee_config: &'a Address,
 	pub quote_token_program: &'a Address,
 }
 
@@ -17,41 +18,18 @@ pub struct BuildMigrateParams<'a> {
 pub fn build_migrate_instruction(
 	p: &BuildMigrateParams<'_>,
 ) -> solana_instruction::Instruction {
-	build_migrate_instruction_from_parts(&BuildMigrateFromPartsParams {
-		caller: p.caller,
-		bonding_curve: p.curve_key,
-		base_mint: &p.curve.base_mint,
-		quote_mint: &p.curve.quote_mint,
-		creator_fee_config: &p.curve.creator_fee_config,
-		quote_token_program: p.quote_token_program,
-	})
-}
-
-#[derive(Clone, Debug)]
-pub struct BuildMigrateFromPartsParams<'a> {
-	pub caller: &'a Address,
-	pub bonding_curve: &'a Address,
-	pub base_mint: &'a Address,
-	pub quote_mint: &'a Address,
-	/// From `BondingCurve::creator_fee_config`; `migrate` pins the slot to it.
-	pub creator_fee_config: &'a Address,
-	pub quote_token_program: &'a Address,
-}
-
-#[must_use]
-pub fn build_migrate_instruction_from_parts(
-	p: &BuildMigrateFromPartsParams<'_>,
-) -> solana_instruction::Instruction {
 	let base_mint = p.base_mint;
 	let quote_mint = p.quote_mint;
 
+	let (bonding_curve, _) =
+		super::pda::find_bonding_curve_pda(base_mint, quote_mint);
 	let (base_vault, _) = crate::utils::find_associated_token_pda(
-		p.bonding_curve,
+		&bonding_curve,
 		base_mint,
 		&TOKEN_2022_PROGRAM_ID,
 	);
 	let (quote_vault, _) = crate::utils::find_associated_token_pda(
-		p.bonding_curve,
+		&bonding_curve,
 		quote_mint,
 		p.quote_token_program,
 	);
@@ -76,7 +54,7 @@ pub fn build_migrate_instruction_from_parts(
 
 	let migrate = super::instructions::Migrate {
 		caller: *p.caller,
-		bonding_curve: *p.bonding_curve,
+		bonding_curve,
 		base_mint: *base_mint,
 		quote_mint: *quote_mint,
 		base_vault,

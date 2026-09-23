@@ -1,6 +1,8 @@
 pub use crate::nexus::generated::pdas::*;
 
-/// Seeds: `["creator_fee_balance", creator_hash, quote_mint]`; frozen string.
+/// Seeds: `["creator_fee_balance", creator_hash, quote_mint]`. `creator_hash`
+/// is [`creator_hash_from_id`](crate::utils::creator_hash_from_id) of
+/// `creator_platform` and `creator_id`.
 #[must_use]
 pub fn find_creator_fee_config_pda_from_id(
 	creator_platform: &str,

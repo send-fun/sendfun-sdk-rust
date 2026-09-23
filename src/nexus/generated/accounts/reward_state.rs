@@ -89,6 +89,34 @@ impl RewardState {
 		let mut data = data;
 		Self::deserialize(&mut data)
 	}
+
+	/// Decodes an account read off-chain after checking its owner and discriminator.
+	pub fn from_account(
+		owner: &solana_address::Address,
+		data: &[u8],
+	) -> Result<Self, std::io::Error> {
+		if *owner != crate::nexus::generated::SEND_NEXUS_ID {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				format!(
+					"invalid account owner: {owner}, expected {}",
+					crate::nexus::generated::SEND_NEXUS_ID
+				),
+			));
+		}
+		Self::from_bytes(data)
+	}
+
+	/// `Ok(None)` for an account that is not created yet: the system program owns it with no data (an address someone sent lamports to).
+	pub fn from_account_maybe(
+		owner: &solana_address::Address,
+		data: &[u8],
+	) -> Result<Option<Self>, std::io::Error> {
+		if data.is_empty() && *owner == super::SYSTEM_PROGRAM_ID {
+			return Ok(None);
+		}
+		Self::from_account(owner, data).map(Some)
+	}
 }
 
 impl<'a> TryFrom<&solana_program::account_info::AccountInfo<'a>>
@@ -108,109 +136,6 @@ impl<'a> TryFrom<&solana_program::account_info::AccountInfo<'a>>
 		let data: &[u8] = &(*account_info.data).borrow();
 		Self::from_bytes(data)
 	}
-}
-
-#[cfg(feature = "fetch")]
-pub fn fetch_reward_state(
-	rpc: &solana_rpc_client::rpc_client::RpcClient,
-	address: &solana_address::Address,
-) -> Result<
-	crate::nexus::generated::shared::DecodedAccount<RewardState>,
-	std::io::Error,
-> {
-	let accounts = fetch_all_reward_state(rpc, &[*address])?;
-	Ok(accounts[0].clone())
-}
-
-#[cfg(feature = "fetch")]
-pub fn fetch_all_reward_state(
-	rpc: &solana_rpc_client::rpc_client::RpcClient,
-	addresses: &[solana_address::Address],
-) -> Result<
-	Vec<crate::nexus::generated::shared::DecodedAccount<RewardState>>,
-	std::io::Error,
-> {
-	let accounts = rpc
-		.get_multiple_accounts(addresses)
-		.map_err(|e| std::io::Error::other(e.to_string()))?;
-	let mut decoded_accounts: Vec<
-		crate::nexus::generated::shared::DecodedAccount<RewardState>,
-	> = Vec::new();
-	for i in 0..addresses.len() {
-		let address = addresses[i];
-		let account = accounts[i].as_ref().ok_or(std::io::Error::other(
-			format!("Account not found: {address}"),
-		))?;
-		if account.owner != crate::nexus::generated::SEND_NEXUS_ID {
-			return Err(std::io::Error::other(format!(
-				"Invalid owner for account: {address}"
-			)));
-		}
-		let data = RewardState::from_bytes(&account.data)?;
-		decoded_accounts.push(
-			crate::nexus::generated::shared::DecodedAccount {
-				address,
-				account: account.clone(),
-				data,
-			},
-		);
-	}
-	Ok(decoded_accounts)
-}
-
-#[cfg(feature = "fetch")]
-pub fn fetch_maybe_reward_state(
-	rpc: &solana_rpc_client::rpc_client::RpcClient,
-	address: &solana_address::Address,
-) -> Result<
-	crate::nexus::generated::shared::MaybeAccount<RewardState>,
-	std::io::Error,
-> {
-	let accounts = fetch_all_maybe_reward_state(rpc, &[*address])?;
-	Ok(accounts[0].clone())
-}
-
-#[cfg(feature = "fetch")]
-pub fn fetch_all_maybe_reward_state(
-	rpc: &solana_rpc_client::rpc_client::RpcClient,
-	addresses: &[solana_address::Address],
-) -> Result<
-	Vec<crate::nexus::generated::shared::MaybeAccount<RewardState>>,
-	std::io::Error,
-> {
-	let accounts = rpc
-		.get_multiple_accounts(addresses)
-		.map_err(|e| std::io::Error::other(e.to_string()))?;
-	let mut decoded_accounts: Vec<
-		crate::nexus::generated::shared::MaybeAccount<RewardState>,
-	> = Vec::new();
-	for i in 0..addresses.len() {
-		let address = addresses[i];
-		if let Some(account) = accounts[i].as_ref() {
-			if account.owner != crate::nexus::generated::SEND_NEXUS_ID {
-				return Err(std::io::Error::other(format!(
-					"Invalid owner for account: {address}"
-				)));
-			}
-			let data = RewardState::from_bytes(&account.data)?;
-			decoded_accounts.push(
-				crate::nexus::generated::shared::MaybeAccount::Exists(
-					crate::nexus::generated::shared::DecodedAccount {
-						address,
-						account: account.clone(),
-						data,
-					},
-				),
-			);
-		} else {
-			decoded_accounts.push(
-				crate::nexus::generated::shared::MaybeAccount::NotFound(
-					address,
-				),
-			);
-		}
-	}
-	Ok(decoded_accounts)
 }
 
 #[cfg(feature = "anchor")]

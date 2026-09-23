@@ -46,7 +46,7 @@ mod tests {
 	}
 }
 
-/// `["platform", name]` @ nexus.
+/// Seeds of a platform PDA: `["platform", name]`, under the nexus program.
 pub const PLATFORM_SEED: &[u8] = b"platform";
 
 #[must_use]

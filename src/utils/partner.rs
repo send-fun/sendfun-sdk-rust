@@ -2,8 +2,8 @@ use solana_address::Address;
 
 use crate::constants::DEFAULT_PARTNER;
 
-/// Makes the `partner` value for the generated builders. Only a partner that
-/// is not `DEFAULT_PARTNER` signs.
+/// `(partner, is_signer)` for the `partner` field of the generated
+/// instructions. `is_signer` is `false` only for `DEFAULT_PARTNER`.
 #[must_use]
 pub fn partner_account(partner: &Address) -> (Address, bool) {
 	(*partner, *partner != DEFAULT_PARTNER)

@@ -27,3 +27,7 @@ pub(crate) mod r#reward_accrual;
 pub use self::r#global_config::*;
 pub use self::r#pool::*;
 pub use self::r#reward_accrual::*;
+
+/// The system program, which owns an address not created yet that someone sent lamports to.
+pub(crate) const SYSTEM_PROGRAM_ID: solana_address::Address =
+	solana_address::Address::new_from_array([0; 32]);

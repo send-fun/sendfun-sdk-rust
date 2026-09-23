@@ -2,7 +2,7 @@ use std::fmt;
 
 const BPS_DIVISOR: u128 = 10_000;
 
-/// Bps-scale denominators only: the `+ denominator` pre-add spends headroom.
+/// Bps-scale denominators only. The `+ denominator` step can overflow.
 fn ceil_div(numerator: u128, denominator: u128) -> Option<u128> {
 	numerator
 		.checked_add(denominator)?
@@ -45,8 +45,8 @@ impl fmt::Display for AmmError {
 
 impl std::error::Error for AmmError {}
 
-/// One epoch's Token-2022 transfer fee. The caller keeps it current; a stale
-/// schedule misprices.
+/// A Token-2022 transfer fee for one epoch. Use the fee of the landing epoch.
+/// A stale fee gives a wrong price.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MintFee {
 	/// 0 to `10_000`.
@@ -58,8 +58,7 @@ pub struct MintFee {
 pub enum QuoteError {
 	Amm(AmmError),
 	InvalidTransferFee,
-	/// No transfer lands exactly the requested amount; approximating one hands
-	/// the program a bound it rejects.
+	/// No transfer amount lands exactly the requested amount.
 	TransferFeeNotSettleable,
 }
 
@@ -99,8 +98,8 @@ fn validate_mint_fee(fee: MintFee) -> Result<(), QuoteError> {
 	Ok(())
 }
 
-/// Rounds up, then caps -- SPL's order. Swapping it breaks
-/// `fee_on(a) + fee_on(b) >= fee_on(a + b)` and a split booking over-credits.
+/// The transfer fee on `amount`, as SPL calculates it: rounds up, then caps at
+/// `maximum_fee`. `0` for `None`.
 pub fn fee_on(amount: u64, fee: Option<MintFee>) -> Result<u64, QuoteError> {
 	let Some(fee) = fee else {
 		return Ok(0);
@@ -128,12 +127,12 @@ pub fn amount_after_fee(
 		.ok_or_else(|| AmmError::Overflow.into())
 }
 
-/// Line-for-line mirror of SPL's `TransferFee::calculate_pre_fee_amount`.
+/// Mirrors SPL's `TransferFee::calculate_pre_fee_amount` line for line.
 fn pre_fee_amount(amount: u64, fee: MintFee) -> Option<u64> {
 	let bps = u128::from(fee.bps);
 	match (bps, amount) {
 		(0, _) => Some(amount),
-		// Unreachable via `gross_up`; kept for the mirror.
+		// `gross_up` never gets here. Kept to match SPL.
 		(_, 0) => Some(0),
 		(BPS_DIVISOR, _) => amount.checked_add(fee.maximum_fee),
 		_ => {
@@ -152,8 +151,9 @@ fn pre_fee_amount(amount: u64, fee: MintFee) -> Option<u64> {
 	}
 }
 
-/// What must be SENT for exactly `amount` to land. SPL's inverse is inexact,
-/// so the implied fee is re-derived forward and rejected unless it settles.
+/// The amount to send so that exactly `amount` lands after the transfer fee.
+/// Fails with `TransferFeeNotSettleable` when no sent amount lands exactly
+/// `amount`.
 pub fn gross_up(amount: u64, fee: Option<MintFee>) -> Result<u64, QuoteError> {
 	let Some(schedule) = fee else {
 		return Ok(amount);
@@ -177,8 +177,9 @@ pub fn gross_up(amount: u64, fee: Option<MintFee>) -> Result<u64, QuoteError> {
 	Ok(gross)
 }
 
-/// `amm.amount` is the user's own leg: quote spent for
-/// [`buy_exact_in_with_fees`], base received for [`buy_exact_out_with_fees`].
+/// `amm.amount` is the user's amount: the quote that the user sends for
+/// [`buy_exact_in_with_fees`], the base that the user receives for
+/// [`buy_exact_out_with_fees`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuyArgs {
 	pub amm: AmmInput,
@@ -188,8 +189,9 @@ pub struct BuyArgs {
 	pub base_reserve_cap: Option<u64>,
 }
 
-/// `amm.amount` is the user's own leg: base sold for
-/// [`sell_exact_in_with_fees`], quote received for [`sell_exact_out_with_fees`].
+/// `amm.amount` is the user's amount: the base that the user sends for
+/// [`sell_exact_in_with_fees`], the quote that the user receives for
+/// [`sell_exact_out_with_fees`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SellArgs {
 	pub amm: AmmInput,
@@ -197,34 +199,38 @@ pub struct SellArgs {
 	pub base_fee: Option<MintFee>,
 }
 
-/// `base_amount` / `quote_amount` are transfer amounts. Read `base_to_user` /
-/// `quote_from_user`; re-deriving them drifts a rounding step off the program.
+/// `base_amount` and `quote_amount` are the transfer amounts. For the user's
+/// amounts, read `base_to_user` and `quote_from_user`. Do not calculate them
+/// from the transfer amounts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuyQuote {
 	pub base_amount: u64,
 	pub quote_amount: u64,
-	/// Platform fee in quote units, priced on the quote reaching the vault.
+	/// Platform fee, in quote units, on the quote that reaches the vault.
 	pub fee: u64,
 	pub base_transfer_fee: u64,
 	pub quote_transfer_fee: u64,
-	/// Net of the base mint's cut.
+	/// The base that the buyer receives, after the base mint's transfer fee.
 	pub base_to_user: u64,
-	/// Equals `quote_amount`: the gross the buyer sends.
+	/// The quote that the buyer sends, with the transfer fee. Equals
+	/// `quote_amount`.
 	pub quote_from_user: u64,
 }
 
-/// Same field contract as [`BuyQuote`].
+/// Same field rules as [`BuyQuote`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SellQuote {
 	pub base_amount: u64,
 	pub quote_amount: u64,
-	/// Platform fee in quote units, priced on the quote leaving the vault.
+	/// Platform fee, in quote units, on the quote output of the AMM before the
+	/// fee.
 	pub fee: u64,
 	pub base_transfer_fee: u64,
 	pub quote_transfer_fee: u64,
-	/// Equals `base_amount`: the gross the seller sends.
+	/// The base that the seller sends, with the transfer fee. Equals
+	/// `base_amount`.
 	pub base_from_user: u64,
-	/// Net of the quote mint's cut.
+	/// The quote that the seller receives, after the quote mint's transfer fee.
 	pub quote_to_user: u64,
 }
 
@@ -252,8 +258,7 @@ fn buy_quote(legs: BuyLegs) -> Result<BuyQuote, QuoteError> {
 	})
 }
 
-/// Guard with `calculate_slippage_down(q.base_to_user, bps)`: the program
-/// bounds what the buyer NETS, not the vault's debit.
+/// Set `min_amount_out` to `calculate_slippage_down(q.base_to_user, bps)`.
 pub fn buy_exact_in_with_fees(args: BuyArgs) -> Result<BuyQuote, QuoteError> {
 	let quote_from_user = args.amm.amount;
 	if quote_from_user == 0 {
@@ -270,8 +275,8 @@ pub fn buy_exact_in_with_fees(args: BuyArgs) -> Result<BuyQuote, QuoteError> {
 		..args.amm
 	})?;
 
-	// Past the cap, re-price exact-out so the user pays only for `cap`, at or
-	// below the offer; clamping the base output alone overstates the quote leg.
+	// Above the cap, price `cap` as exact-out. The user pays only for `cap`, at
+	// or below the offer.
 	let Some(cap) = args
 		.base_reserve_cap
 		.filter(|cap| uncapped.base_amount > *cap)
@@ -304,7 +309,7 @@ pub fn buy_exact_in_with_fees(args: BuyArgs) -> Result<BuyQuote, QuoteError> {
 	})
 }
 
-/// Guard with `calculate_slippage_up(q.quote_from_user, bps)`.
+/// Set `max_amount_in` to `calculate_slippage_up(q.quote_from_user, bps)`.
 pub fn buy_exact_out_with_fees(args: BuyArgs) -> Result<BuyQuote, QuoteError> {
 	let base_to_user = args.amm.amount;
 	if base_to_user == 0 {
@@ -333,8 +338,7 @@ pub fn buy_exact_out_with_fees(args: BuyArgs) -> Result<BuyQuote, QuoteError> {
 	})
 }
 
-/// Guard with `calculate_slippage_down(q.quote_to_user, bps)`. Quote leg:
-/// [`fee_on`], NEVER [`gross_up`] -- the AMM output leaves the vault as priced.
+/// Set `min_amount_out` to `calculate_slippage_down(q.quote_to_user, bps)`.
 pub fn sell_exact_in_with_fees(
 	args: SellArgs,
 ) -> Result<SellQuote, QuoteError> {
@@ -370,7 +374,7 @@ pub fn sell_exact_in_with_fees(
 	})
 }
 
-/// Guard with `calculate_slippage_up(q.base_from_user, bps)`.
+/// Set `max_amount_in` to `calculate_slippage_up(q.base_from_user, bps)`.
 pub fn sell_exact_out_with_fees(
 	args: SellArgs,
 ) -> Result<SellQuote, QuoteError> {
@@ -401,7 +405,8 @@ pub fn sell_exact_out_with_fees(
 	})
 }
 
-/// Buys `input.amount` base units; max quote cost: `buy(q.base_amount, calculate_slippage_up(q.quote_amount, bps))`.
+/// Prices a buy of exactly `input.amount` base units. Set `max_amount_in` to
+/// `calculate_slippage_up(q.quote_amount, bps)`.
 pub fn buy_exact_out(input: AmmInput) -> Result<TradeQuote, AmmError> {
 	let base_amount = input.amount;
 	let quote_before_fee = calculate_input_for_output(
@@ -410,7 +415,7 @@ pub fn buy_exact_out(input: AmmInput) -> Result<TradeQuote, AmmError> {
 		base_amount,
 	)?;
 
-	// Gross quote cost rounds up so the buyer covers the fee.
+	// The gross quote rounds up. The buyer pays the remainder.
 	let fee_bps = u128::from(input.fee_bps);
 	let quote = u128::from(quote_before_fee);
 
@@ -439,14 +444,15 @@ pub fn buy_exact_out(input: AmmInput) -> Result<TradeQuote, AmmError> {
 	})
 }
 
-/// Spends `input.amount` quote units; min base output: `buy(calculate_slippage_down(q.base_amount, bps), q.quote_amount)`.
+/// Prices a buy that spends exactly `input.amount` quote units. Set
+/// `min_amount_out` to `calculate_slippage_down(q.base_amount, bps)`.
 pub fn buy_exact_in(input: AmmInput) -> Result<TradeQuote, AmmError> {
 	let quote_amount = input.amount;
 	if quote_amount == 0 {
 		return Err(AmmError::InvalidAmount);
 	}
 
-	// Net quote budget rounds down; the remainder is the quote-token fee.
+	// The net quote rounds down. The remainder is the fee.
 	let fee_bps_128 = u128::from(input.fee_bps);
 	let quote_128 = u128::from(quote_amount);
 
@@ -482,7 +488,8 @@ pub fn buy_exact_in(input: AmmInput) -> Result<TradeQuote, AmmError> {
 	})
 }
 
-/// Sells `input.amount` base units; min quote output: `sell(q.base_amount, calculate_slippage_down(q.quote_amount, bps))`.
+/// Prices a sale of exactly `input.amount` base units. Set `min_amount_out` to
+/// `calculate_slippage_down(q.quote_amount, bps)`.
 pub fn sell_exact_in(input: AmmInput) -> Result<TradeQuote, AmmError> {
 	if u128::from(input.fee_bps) > BPS_DIVISOR {
 		return Err(AmmError::InvalidAmount);
@@ -495,7 +502,7 @@ pub fn sell_exact_in(input: AmmInput) -> Result<TradeQuote, AmmError> {
 		base_amount,
 	)?;
 
-	// The quote-token fee rounds up in the protocol's favor.
+	// The fee rounds up.
 	let numerator = u128::from(quote_before_fee)
 		.checked_mul(u128::from(input.fee_bps))
 		.ok_or(AmmError::Overflow)?;
@@ -514,14 +521,15 @@ pub fn sell_exact_in(input: AmmInput) -> Result<TradeQuote, AmmError> {
 	})
 }
 
-/// Targets `input.amount` net quote units; max base input: `sell(calculate_slippage_up(q.base_amount, bps), q.quote_amount)`.
+/// Prices a sale that gives exactly `input.amount` quote units after the fee.
+/// Set `max_amount_in` to `calculate_slippage_up(q.base_amount, bps)`.
 pub fn sell_exact_out(input: AmmInput) -> Result<TradeQuote, AmmError> {
 	let quote_amount = input.amount;
 	if quote_amount == 0 {
 		return Err(AmmError::InvalidAmount);
 	}
 
-	// Gross quote output rounds up so the seller covers the fee.
+	// The gross quote rounds up. The seller pays the remainder.
 	let fee_bps_128 = u128::from(input.fee_bps);
 	let quote_128 = u128::from(quote_amount);
 
@@ -559,7 +567,7 @@ pub fn sell_exact_out(input: AmmInput) -> Result<TradeQuote, AmmError> {
 	})
 }
 
-/// Upper bound rounded up: the most the caller will pay or sell.
+/// `amount` plus `slippage_bps`, rounded up. Use it for `max_amount_in`.
 pub fn calculate_slippage_up(
 	amount: u64,
 	slippage_bps: u16,
@@ -575,7 +583,7 @@ pub fn calculate_slippage_up(
 	u64::try_from(result).map_err(|_| AmmError::Overflow)
 }
 
-/// Lower bound rounded down: the least the caller will accept.
+/// `amount` minus `slippage_bps`, rounded down. Use it for `min_amount_out`.
 pub fn calculate_slippage_down(
 	amount: u64,
 	slippage_bps: u16,
@@ -592,7 +600,7 @@ pub fn calculate_slippage_down(
 	u64::try_from(result).map_err(|_| AmmError::Overflow)
 }
 
-/// Output rounds down so the protocol retains the remainder.
+/// Constant-product output for `amount_in`. Rounds down.
 pub fn calculate_output(
 	reserve_in: u64,
 	reserve_out: u64,
@@ -612,8 +620,8 @@ pub fn calculate_output(
 		.checked_add(u128::from(amount_in))
 		.ok_or(AmmError::Overflow)?;
 
-	// Not `ceil_div`: `k + reserve_in + amount_in` peaks at exactly `u128::MAX`
-	// with u64 inputs. Widen any of the three and the pre-add overflows.
+	// Not `ceil_div`: `k + reserve_in + amount_in` reaches exactly `u128::MAX`
+	// with u64 inputs. A wider input makes the pre-add overflow.
 	let mut new_reserve_out =
 		k.checked_div(new_reserve_in).ok_or(AmmError::Overflow)?;
 	let remainder = k.checked_rem(new_reserve_in).ok_or(AmmError::Overflow)?;
@@ -632,7 +640,7 @@ pub fn calculate_output(
 	u64::try_from(amount_out).map_err(|_| AmmError::Overflow)
 }
 
-/// Required input rounds up so the user pays enough.
+/// Constant-product input for `amount_out`. Rounds up.
 pub fn calculate_input_for_output(
 	reserve_in: u64,
 	reserve_out: u64,
@@ -671,8 +679,8 @@ pub fn calculate_input_for_output(
 	u64::try_from(amount_in).map_err(|_| AmmError::Overflow)
 }
 
-/// Same vectors as the on-chain and TypeScript suites; change an expected value
-/// in all three or none.
+/// The TypeScript SDK tests use the same vectors. Change an expected value in
+/// both.
 #[cfg(test)]
 mod transfer_fee_tests {
 	use super::*;
@@ -774,8 +782,7 @@ mod transfer_fee_tests {
 
 	#[test]
 	fn the_fee_stays_superadditive_across_a_split_at_the_cap() {
-		// 300 + 400 >= 500: a split booking can only over-collect, which is what
-		// the on-chain split bookings rely on.
+		// 300 + 400 >= 500: a split booking can only collect more.
 		let fee = Some(MintFee {
 			bps: 100,
 			maximum_fee: 500,
@@ -1011,7 +1018,7 @@ mod transfer_fee_tests {
 			base_reserve_cap: Some(1_000_000_000_000),
 		})
 		.unwrap();
-		// The curve leg stays 30_333_365; only the user's leg grows.
+		// The curve leg stays 30_333_365. Only the user's leg grows.
 		assert_buy(
 			&charged,
 			[
@@ -1185,7 +1192,7 @@ mod transfer_fee_tests {
 			base_fee: None,
 		})
 		.unwrap();
-		// Nothing is grossed up: the mint takes its cut in flight.
+		// No gross-up: the mint takes its fee from the transfer.
 		assert_sell(
 			&quote,
 			[
@@ -1700,7 +1707,7 @@ mod tests {
 		})
 		.unwrap();
 
-		// Fees plus rounding always leave the round trip short.
+		// Fees and rounding make the round trip return less.
 		assert!(sell.quote_amount < buy.quote_amount);
 	}
 

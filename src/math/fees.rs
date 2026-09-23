@@ -6,12 +6,13 @@ pub struct FeeSplitArgs {
 	pub decay_premium_bps: u64,
 }
 
-/// `(protocol, lp, creator, sniper)`: LP/creator round down; protocol gets
-/// the premium and the remainder, so `sniper` is a subset of `protocol`.
+/// Splits `fee_amount` into `(protocol, lp, creator, sniper)`. LP and creator
+/// round down. Protocol gets the decay premium and the remainder. `sniper` is
+/// the premium part of `protocol`.
 #[must_use]
 pub fn split_fee_amount(args: FeeSplitArgs) -> Option<(u64, u64, u64, u64)> {
 	let fee_amount = args.fee_amount;
-	// Zero fees split successfully even when total BPS is zero.
+	// A zero fee splits even when the total rate is zero.
 	if fee_amount == 0 {
 		return Some((0, 0, 0, 0));
 	}

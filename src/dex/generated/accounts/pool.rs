@@ -134,6 +134,34 @@ impl Pool {
 		let mut data = data;
 		Self::deserialize(&mut data)
 	}
+
+	/// Decodes an account read off-chain after checking its owner and discriminator.
+	pub fn from_account(
+		owner: &solana_address::Address,
+		data: &[u8],
+	) -> Result<Self, std::io::Error> {
+		if *owner != crate::dex::generated::SEND_DEX_ID {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				format!(
+					"invalid account owner: {owner}, expected {}",
+					crate::dex::generated::SEND_DEX_ID
+				),
+			));
+		}
+		Self::from_bytes(data)
+	}
+
+	/// `Ok(None)` for an account that is not created yet: the system program owns it with no data (an address someone sent lamports to).
+	pub fn from_account_maybe(
+		owner: &solana_address::Address,
+		data: &[u8],
+	) -> Result<Option<Self>, std::io::Error> {
+		if data.is_empty() && *owner == super::SYSTEM_PROGRAM_ID {
+			return Ok(None);
+		}
+		Self::from_account(owner, data).map(Some)
+	}
 }
 
 impl<'a> TryFrom<&solana_program::account_info::AccountInfo<'a>> for Pool {
@@ -151,100 +179,6 @@ impl<'a> TryFrom<&solana_program::account_info::AccountInfo<'a>> for Pool {
 		let data: &[u8] = &(*account_info.data).borrow();
 		Self::from_bytes(data)
 	}
-}
-
-#[cfg(feature = "fetch")]
-pub fn fetch_pool(
-	rpc: &solana_rpc_client::rpc_client::RpcClient,
-	address: &solana_address::Address,
-) -> Result<crate::dex::generated::shared::DecodedAccount<Pool>, std::io::Error>
-{
-	let accounts = fetch_all_pool(rpc, &[*address])?;
-	Ok(accounts[0].clone())
-}
-
-#[cfg(feature = "fetch")]
-pub fn fetch_all_pool(
-	rpc: &solana_rpc_client::rpc_client::RpcClient,
-	addresses: &[solana_address::Address],
-) -> Result<
-	Vec<crate::dex::generated::shared::DecodedAccount<Pool>>,
-	std::io::Error,
-> {
-	let accounts = rpc
-		.get_multiple_accounts(addresses)
-		.map_err(|e| std::io::Error::other(e.to_string()))?;
-	let mut decoded_accounts: Vec<
-		crate::dex::generated::shared::DecodedAccount<Pool>,
-	> = Vec::new();
-	for i in 0..addresses.len() {
-		let address = addresses[i];
-		let account = accounts[i].as_ref().ok_or(std::io::Error::other(
-			format!("Account not found: {address}"),
-		))?;
-		if account.owner != crate::dex::generated::SEND_DEX_ID {
-			return Err(std::io::Error::other(format!(
-				"Invalid owner for account: {address}"
-			)));
-		}
-		let data = Pool::from_bytes(&account.data)?;
-		decoded_accounts.push(crate::dex::generated::shared::DecodedAccount {
-			address,
-			account: account.clone(),
-			data,
-		});
-	}
-	Ok(decoded_accounts)
-}
-
-#[cfg(feature = "fetch")]
-pub fn fetch_maybe_pool(
-	rpc: &solana_rpc_client::rpc_client::RpcClient,
-	address: &solana_address::Address,
-) -> Result<crate::dex::generated::shared::MaybeAccount<Pool>, std::io::Error> {
-	let accounts = fetch_all_maybe_pool(rpc, &[*address])?;
-	Ok(accounts[0].clone())
-}
-
-#[cfg(feature = "fetch")]
-pub fn fetch_all_maybe_pool(
-	rpc: &solana_rpc_client::rpc_client::RpcClient,
-	addresses: &[solana_address::Address],
-) -> Result<
-	Vec<crate::dex::generated::shared::MaybeAccount<Pool>>,
-	std::io::Error,
-> {
-	let accounts = rpc
-		.get_multiple_accounts(addresses)
-		.map_err(|e| std::io::Error::other(e.to_string()))?;
-	let mut decoded_accounts: Vec<
-		crate::dex::generated::shared::MaybeAccount<Pool>,
-	> = Vec::new();
-	for i in 0..addresses.len() {
-		let address = addresses[i];
-		if let Some(account) = accounts[i].as_ref() {
-			if account.owner != crate::dex::generated::SEND_DEX_ID {
-				return Err(std::io::Error::other(format!(
-					"Invalid owner for account: {address}"
-				)));
-			}
-			let data = Pool::from_bytes(&account.data)?;
-			decoded_accounts.push(
-				crate::dex::generated::shared::MaybeAccount::Exists(
-					crate::dex::generated::shared::DecodedAccount {
-						address,
-						account: account.clone(),
-						data,
-					},
-				),
-			);
-		} else {
-			decoded_accounts.push(
-				crate::dex::generated::shared::MaybeAccount::NotFound(address),
-			);
-		}
-	}
-	Ok(decoded_accounts)
 }
 
 #[cfg(feature = "anchor")]

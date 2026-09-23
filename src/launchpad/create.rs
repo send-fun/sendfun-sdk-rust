@@ -14,7 +14,7 @@ pub struct BuildCreateTokenParams<'a> {
 	pub base_mint: &'a Address,
 	pub quote_mint: &'a Address,
 	pub partner: &'a Address,
-	/// Stamped on the curve; seeds `partner_config`.
+	/// Stored on the bonding curve. Seeds `partner_config`.
 	pub platform_config: &'a Address,
 	pub quote_token_program: &'a Address,
 	pub creator_platform: &'a str,
@@ -24,7 +24,8 @@ pub struct BuildCreateTokenParams<'a> {
 	pub uri: &'a str,
 }
 
-/// `base_mint` must be a new keypair; the caller signs the transaction with it.
+/// `base_mint` must be the address of a new keypair. Sign the transaction with
+/// that keypair.
 #[must_use]
 pub fn build_create_token_instruction(
 	p: &BuildCreateTokenParams<'_>,
@@ -61,7 +62,8 @@ pub fn build_create_token_instruction(
 		p.quote_mint,
 		p.quote_token_program,
 	);
-	// `create_token` inits it if missing; the fee accrues to the WSOL one.
+	// `create_token` creates it if it does not exist. The creation fee goes to
+	// the WSOL accrual.
 	let (reward_accrual, _) =
 		super::generated::pdas::find_reward_accrual_pda(p.quote_mint);
 
@@ -118,7 +120,7 @@ mod tests {
 
 	const PARTNER_INDEX: usize = 12;
 
-	/// A Token-2022 quote mint a fresh creator holds none of.
+	/// A Token-2022 quote mint that the creator does not hold.
 	const TSLAX_MINT: Address =
 		solana_address::address!("XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB");
 
@@ -172,7 +174,7 @@ mod tests {
 		assert!(!ix.accounts[PARTNER_INDEX].is_signer);
 	}
 
-	/// The fee is native SOL, so launching needs no holding of the quote asset.
+	/// The creation fee is in SOL. The creator needs no quote tokens.
 	#[test]
 	fn no_account_is_derived_from_the_creator_and_the_quote_mint() {
 		let user = Address::new_from_array([1u8; 32]);
@@ -189,7 +191,7 @@ mod tests {
 		);
 		assert!(!ix.accounts.iter().any(|m| m.pubkey == user_quote_ata));
 
-		// The fee still lands in the WSOL vault.
+		// The creation fee goes to the WSOL vault.
 		let (staking_wsol_vault, _) = crate::utils::find_associated_token_pda(
 			&crate::nexus::pda::STAKING_CONFIG_ADDRESS,
 			&WSOL_MINT,
@@ -198,7 +200,7 @@ mod tests {
 		assert!(ix.accounts.iter().any(|m| m.pubkey == staking_wsol_vault));
 	}
 
-	/// `user` funds the fee even though `payer` covers rent.
+	/// `user` pays the creation fee. `payer` pays the rent.
 	#[test]
 	fn the_fee_paying_user_slot_is_writable() {
 		let ix = wsol_instruction(&DEFAULT_PARTNER);

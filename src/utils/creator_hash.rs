@@ -1,6 +1,8 @@
 use solana_address::Address;
 
-/// Frozen: this length-prefixed layout derives live `CreatorFeeConfig` PDAs.
+/// SHA-256 of the byte length of `creator_platform`, `creator_platform`, the
+/// byte length of `creator_id`, and `creator_id`. Each length is a
+/// little-endian `u32`. Seeds the `CreatorFeeConfig` PDA.
 #[must_use]
 pub fn creator_hash_from_id(
 	creator_platform: &str,
@@ -19,8 +21,8 @@ pub fn creator_hash_from_id(
 	)
 }
 
-/// NUL-padded; `None` over `N` bytes. Stored ids are printable ASCII, so the
-/// padding is unambiguous.
+/// Copies `text` into `[u8; N]` and pads it with NUL bytes. `None` if `text` is
+/// longer than `N` bytes.
 #[must_use]
 pub fn encode_creator_id<const N: usize>(text: &str) -> Option<[u8; N]> {
 	let bytes = text.as_bytes();
@@ -29,8 +31,8 @@ pub fn encode_creator_id<const N: usize>(text: &str) -> Option<[u8; N]> {
 	Some(out)
 }
 
-/// Strips NUL padding. Pass the result, never the padded array, to
-/// [`creator_hash_from_id`]: padding changes the length prefix and the PDA.
+/// Removes the trailing NUL bytes. `None` if the rest is not UTF-8. Pass the
+/// result to [`creator_hash_from_id`]. The padded array gives a different hash.
 #[must_use]
 pub fn decode_creator_id(bytes: &[u8]) -> Option<&str> {
 	let end = match bytes.iter().rposition(|&b| b != 0) {

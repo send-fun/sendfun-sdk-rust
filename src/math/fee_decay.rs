@@ -6,8 +6,8 @@ pub struct FeeDecayArgs {
 	pub standard_fee_bps: u64,
 }
 
-/// Premium decaying quadratically from `decay_start_bps -
-/// standard_fee_bps` at creation to zero at `decay_seconds`.
+/// Fee decay premium, in bps. It falls quadratically from
+/// `decay_start_bps - standard_fee_bps` at creation to 0 at `decay_seconds`.
 #[must_use]
 pub fn calculate_fee_decay_premium(args: FeeDecayArgs) -> Option<u64> {
 	if args.decay_seconds == 0 {
@@ -16,7 +16,7 @@ pub fn calculate_fee_decay_premium(args: FeeDecayArgs) -> Option<u64> {
 
 	let start_bps = u64::from(args.decay_start_bps);
 
-	// Future creation timestamps pay the full premium instead of a discount.
+	// A creation time in the future pays the full premium.
 	let Some(elapsed) = args
 		.current_timestamp
 		.checked_sub(args.created_at_timestamp)
@@ -41,7 +41,7 @@ pub fn calculate_fee_decay_premium(args: FeeDecayArgs) -> Option<u64> {
 	let denominator = u128::from(decay_seconds_u64)
 		.checked_mul(u128::from(decay_seconds_u64))?;
 
-	// Rounds up: the payer eats the dust, not the protocol.
+	// Rounds up. The payer pays the remainder.
 	let mut result = numerator.checked_div(denominator)?;
 	let remainder = numerator.checked_rem(denominator)?;
 	if remainder > 0 {

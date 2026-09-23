@@ -26,7 +26,6 @@ pub mod events;
 pub mod instructions;
 pub mod pdas;
 pub mod programs;
-pub mod shared;
 pub mod types;
 
 pub(crate) use programs::*;

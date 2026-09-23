@@ -1,279 +1,168 @@
-//! No `spl-token-2022`: it drags confidential transfers into a dep-free SDK.
-//!
-//! Cache a config only while [`TransferFeeConfig::authority`] is `None`.
+//! Reads the transfer fee of a Token-2022 mint from raw account data, for the
+//! [`math::amm`](crate::math::amm) quotes.
+//! Cache a `TransferFeeConfig` only while its `transfer_fee_config_authority`
+//! is `None`.
 
-use std::fmt;
-
+use bytemuck::Pod;
 use solana_address::Address;
+use solana_program::program_error::ProgramError;
+use spl_token_2022_interface::error::TokenError;
+use spl_token_2022_interface::extension::{
+	AccountType, BaseStateWithExtensions, Extension, PodStateWithExtensions,
+};
+use spl_token_2022_interface::pod::PodMint;
 
 use crate::constants::{TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID};
 use crate::math::amm::MintFee;
 
-/// A Token-2022 mint of exactly this length carries no extensions.
-const MINT_BASE_LEN: usize = 82;
+pub use spl_token_2022_interface::extension::transfer_fee::{
+	TransferFee, TransferFeeConfig,
+};
 
-/// Token-2022 pads the mint to the token-account length before this byte.
-const ACCOUNT_TYPE_OFFSET: usize = 165;
-
-const ACCOUNT_TYPE_MINT: u8 = 1;
-
-const TLV_START: usize = 166;
-
-const TLV_TYPE_LEN: usize = 2;
-
+/// A TLV entry header: the `u16` type, then the `u16` length.
 const TLV_HEADER_LEN: usize = 4;
 
-const UNINITIALIZED_TYPE: u16 = 0;
-
-const TRANSFER_FEE_CONFIG_TYPE: u16 = 1;
-
-/// Two 32-byte authorities, `withheld_amount: u64`, then the older and newer
-/// 18-byte `TransferFee` entries.
-const TRANSFER_FEE_CONFIG_LEN: usize = 108;
-
-const CONFIG_AUTHORITY_OFFSET: usize = 0;
-
-const OLDER_FEE_OFFSET: usize = 72;
-
-const NEWER_FEE_OFFSET: usize = 90;
-
-const FEE_MAXIMUM_OFFSET: usize = 8;
-
-const FEE_BASIS_POINTS_OFFSET: usize = 16;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransferFeeEntry {
-	pub epoch: u64,
-	pub maximum_fee: u64,
-	pub basis_points: u16,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransferFeeConfig {
-	/// `None`: the schedule is frozen forever.
-	pub authority: Option<Address>,
-	pub older: TransferFeeEntry,
-	pub newer: TransferFeeEntry,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransferFeeDecodeError {
-	UnknownOwner,
-	Malformed,
-}
-
-impl fmt::Display for TransferFeeDecodeError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			Self::UnknownOwner => {
-				write!(f, "Mint is owned by neither token program")
-			}
-			Self::Malformed => write!(f, "Malformed mint extension data"),
-		}
-	}
-}
-
-impl std::error::Error for TransferFeeDecodeError {}
-
-fn read_u16(payload: &[u8], offset: usize) -> Option<u16> {
-	let end = offset.checked_add(2)?;
-	let &[low, high] = payload.get(offset..end)? else {
-		return None;
-	};
-	Some(u16::from_le_bytes([low, high]))
-}
-
-fn read_u64(payload: &[u8], offset: usize) -> Option<u64> {
-	let end = offset.checked_add(8)?;
-	let bytes: [u8; 8] = payload.get(offset..end)?.try_into().ok()?;
-	Some(u64::from_le_bytes(bytes))
-}
-
-fn read_entry(payload: &[u8], offset: usize) -> Option<TransferFeeEntry> {
-	Some(TransferFeeEntry {
-		epoch: read_u64(payload, offset)?,
-		maximum_fee: read_u64(
-			payload,
-			offset.checked_add(FEE_MAXIMUM_OFFSET)?,
-		)?,
-		basis_points: read_u16(
-			payload,
-			offset.checked_add(FEE_BASIS_POINTS_OFFSET)?,
-		)?,
-	})
-}
-
-/// Exact length only: an oversized payload would parse its first 108 bytes.
-/// `None` means [`TransferFeeDecodeError::Malformed`], never "no fee".
-fn read_config(payload: &[u8]) -> Option<TransferFeeConfig> {
-	if payload.len() != TRANSFER_FEE_CONFIG_LEN {
-		return None;
-	}
-
-	let end = CONFIG_AUTHORITY_OFFSET.checked_add(32)?;
-	let authority: [u8; 32] =
-		payload.get(CONFIG_AUTHORITY_OFFSET..end)?.try_into().ok()?;
-
-	Some(TransferFeeConfig {
-		// `OptionalNonZeroPubkey` is `None` exactly when all 32 bytes are zero.
-		authority: (authority != [0; 32])
-			.then(|| Address::new_from_array(authority)),
-		older: read_entry(payload, OLDER_FEE_OFFSET)?,
-		newer: read_entry(payload, NEWER_FEE_OFFSET)?,
-	})
-}
-
-/// `(type, payload)` in account order; empty for an SPL mint. Every entry up to
-/// the first zero type, or a tail too short for one, must be whole.
+/// Unpacks a mint and its extensions. `Ok(None)` for an SPL Token mint. Fails
+/// with `ProgramError::IncorrectProgramId` if no token program owns the mint.
 pub fn mint_extensions<'a>(
 	data: &'a [u8],
 	owner: &Address,
-) -> Result<Vec<(u16, &'a [u8])>, TransferFeeDecodeError> {
+) -> Result<Option<PodStateWithExtensions<'a, PodMint>>, ProgramError> {
 	if owner == &TOKEN_PROGRAM_ID {
-		return Ok(Vec::new());
+		return Ok(None);
 	}
 	if owner != &TOKEN_2022_PROGRAM_ID {
-		return Err(TransferFeeDecodeError::UnknownOwner);
+		return Err(ProgramError::IncorrectProgramId);
 	}
-	if data.len() == MINT_BASE_LEN {
-		return Ok(Vec::new());
-	}
-	if data.len() < TLV_START {
-		return Err(TransferFeeDecodeError::Malformed);
-	}
-	// A token account shares this TLV layout with different extension types.
-	if data.get(ACCOUNT_TYPE_OFFSET) != Some(&ACCOUNT_TYPE_MINT) {
-		return Err(TransferFeeDecodeError::Malformed);
-	}
+	PodStateWithExtensions::<PodMint>::unpack(data).map(Some)
+}
 
-	let mut extensions = Vec::new();
-	let mut offset = TLV_START;
-	while offset < data.len() {
-		let type_end = offset
-			.checked_add(TLV_TYPE_LEN)
-			.ok_or(TransferFeeDecodeError::Malformed)?;
-		// Too short for a type, or a zero type: trailing slack, as SPL reads it.
-		let Some(&[type_low, type_high]) = data.get(offset..type_end) else {
-			break;
-		};
-		let extension_type = u16::from_le_bytes([type_low, type_high]);
-		if extension_type == UNINITIALIZED_TYPE {
-			break;
+/// Reads the mint extension `V`.
+///
+/// `Ok(None)` only when the mint does not have `V`. A malformed extension
+/// region is an error, not `Ok(None)`. An account extension type fails with
+/// `ProgramError::InvalidAccountData`.
+pub fn extension<'a, V: Extension + Pod>(
+	mint: &'a PodStateWithExtensions<'_, PodMint>,
+) -> Result<Option<&'a V>, ProgramError> {
+	match mint.get_extension::<V>() {
+		Ok(value) => Ok(Some(value)),
+		// The walk reached a zero type before `V`.
+		Err(error) if error == TokenError::ExtensionNotFound.into() => Ok(None),
+		// The walk ran off the end, the data is cut, or `V` is an account
+		// extension. Token-2022 allocates the exact size, so a clean end means
+		// `V` is absent.
+		Err(ProgramError::InvalidAccountData)
+			if V::TYPE.get_account_type() == AccountType::Mint
+				&& ends_cleanly(mint.get_tlv_data()) =>
+		{
+			Ok(None)
 		}
+		Err(error) => Err(error),
+	}
+}
 
-		let header_end = offset
-			.checked_add(TLV_HEADER_LEN)
-			.ok_or(TransferFeeDecodeError::Malformed)?;
-		// A set type with a cut length is malformed, not the end of the list.
-		let Some(&[length_low, length_high]) = data.get(type_end..header_end)
-		else {
-			return Err(TransferFeeDecodeError::Malformed);
+/// `true` if every TLV entry is whole, as SPL walks the entries.
+/// Does not parse types as `ExtensionType`: an unknown type must not make a
+/// fee-free mint unreadable.
+fn ends_cleanly(tlv: &[u8]) -> bool {
+	let mut rest = tlv;
+	loop {
+		let Some(&[type_low, type_high]) = rest.get(..2) else {
+			return true;
 		};
-
+		if u16::from_le_bytes([type_low, type_high]) == 0 {
+			return true;
+		}
+		let Some(&[length_low, length_high]) = rest.get(2..TLV_HEADER_LEN)
+		else {
+			return false;
+		};
 		let length = usize::from(u16::from_le_bytes([length_low, length_high]));
-		let payload_end = header_end
+		let Some(next) = TLV_HEADER_LEN
 			.checked_add(length)
-			.ok_or(TransferFeeDecodeError::Malformed)?;
-		let payload = data
-			.get(header_end..payload_end)
-			.ok_or(TransferFeeDecodeError::Malformed)?;
-		extensions.push((extension_type, payload));
-		offset = payload_end;
+			.and_then(|end| rest.get(end..))
+		else {
+			return false;
+		};
+		rest = next;
 	}
-
-	Ok(extensions)
 }
 
-/// `Ok(None)` only without the extension. A 0 bps config stays `Some`: its
-/// rate can rise, and a leg grossed up as fee-free fails the program's bound.
-pub fn decode_transfer_fee_config(
-	data: &[u8],
-	owner: &Address,
-) -> Result<Option<TransferFeeConfig>, TransferFeeDecodeError> {
-	mint_extensions(data, owner)?
-		.into_iter()
-		.find(|(extension_type, _)| *extension_type == TRANSFER_FEE_CONFIG_TYPE)
-		.map(|(_, payload)| {
-			read_config(payload).ok_or(TransferFeeDecodeError::Malformed)
-		})
-		.transpose()
-}
-
-/// Mirrors SPL's `get_epoch_fee`.
 #[must_use]
-pub const fn transfer_fee_at_epoch(
-	config: &TransferFeeConfig,
-	epoch: u64,
-) -> MintFee {
-	let entry = if epoch >= config.newer.epoch {
-		&config.newer
-	} else {
-		&config.older
-	};
-
+pub fn mint_fee(fee: &TransferFee) -> MintFee {
 	MintFee {
-		bps: entry.basis_points,
-		maximum_fee: entry.maximum_fee,
+		bps: fee.transfer_fee_basis_points.into(),
+		maximum_fee: fee.maximum_fee.into(),
 	}
 }
 
+/// The transfer fee of a mint at `epoch`. `Ok(None)` only when the mint has no
+/// `TransferFeeConfig`. A 0 bps config gives `Some`.
 pub fn mint_fee_at_epoch(
 	data: &[u8],
 	owner: &Address,
 	epoch: u64,
-) -> Result<Option<MintFee>, TransferFeeDecodeError> {
-	Ok(decode_transfer_fee_config(data, owner)?
-		.map(|config| transfer_fee_at_epoch(&config, epoch)))
+) -> Result<Option<MintFee>, ProgramError> {
+	let Some(mint) = mint_extensions(data, owner)? else {
+		return Ok(None);
+	};
+	Ok(extension::<TransferFeeConfig>(&mint)?
+		.map(|config| mint_fee(config.get_epoch_fee(epoch))))
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
 
-	const OLDER: TransferFeeEntry = TransferFeeEntry {
-		epoch: 5,
-		maximum_fee: 1_000,
-		basis_points: 100,
-	};
+	use spl_token_2022_interface::extension::transfer_fee::TransferFeeAmount;
 
-	const NEWER: TransferFeeEntry = TransferFeeEntry {
-		epoch: 7,
+	/// SPL's `unpack` refuses a mint with this byte unset.
+	const IS_INITIALIZED_OFFSET: usize = 45;
+
+	/// Token-2022 pads the mint to the token-account length before this byte.
+	const ACCOUNT_TYPE_OFFSET: usize = 165;
+
+	const TLV_START: usize = 166;
+
+	const FEE_TYPE: u16 = 1;
+
+	/// Above every type that SPL 3.1.1 defines.
+	const FUTURE_TYPE: u16 = 250;
+
+	const NEWER: Option<MintFee> = Some(MintFee {
+		bps: 250,
 		maximum_fee: 2_000,
-		basis_points: 250,
-	};
+	});
 
-	const AUTHORITY: [u8; 32] = [9; 32];
+	fn entry(epoch: u64, maximum_fee: u64, basis_points: u16) -> TransferFee {
+		TransferFee {
+			epoch: epoch.into(),
+			maximum_fee: maximum_fee.into(),
+			transfer_fee_basis_points: basis_points.into(),
+		}
+	}
 
-	/// `MetadataPointer` then `TokenMetadata`: what `create_token` writes.
+	fn fee_payload(authority: Option<Address>) -> Vec<u8> {
+		bytemuck::bytes_of(&TransferFeeConfig {
+			transfer_fee_config_authority: authority.try_into().unwrap(),
+			older_transfer_fee: entry(5, 1_000, 100),
+			newer_transfer_fee: entry(7, 2_000, 250),
+			..TransferFeeConfig::default()
+		})
+		.to_vec()
+	}
+
+	/// `MetadataPointer`, then `TokenMetadata`. `create_token` writes both.
 	fn other_extensions() -> Vec<(u16, Vec<u8>)> {
 		vec![(18, vec![0; 64]), (19, vec![0; 90])]
 	}
 
-	fn fee_payload(
-		authority: Option<[u8; 32]>,
-		older: TransferFeeEntry,
-		newer: TransferFeeEntry,
-	) -> Vec<u8> {
-		let mut payload = Vec::with_capacity(TRANSFER_FEE_CONFIG_LEN);
-		payload.extend_from_slice(&authority.unwrap_or([0; 32]));
-		// `withdraw_withheld_authority`, then `withheld_amount`.
-		payload.extend_from_slice(&[0; 32]);
-		payload.extend_from_slice(&0_u64.to_le_bytes());
-		for entry in [older, newer] {
-			payload.extend_from_slice(&entry.epoch.to_le_bytes());
-			payload.extend_from_slice(&entry.maximum_fee.to_le_bytes());
-			payload.extend_from_slice(&entry.basis_points.to_le_bytes());
-		}
-		payload
-	}
-
-	fn default_fee_payload() -> Vec<u8> {
-		fee_payload(Some(AUTHORITY), OLDER, NEWER)
-	}
-
 	fn tlv_image(entries: &[(u16, Vec<u8>)]) -> Vec<u8> {
 		let mut data = vec![0_u8; ACCOUNT_TYPE_OFFSET];
-		data.push(ACCOUNT_TYPE_MINT);
+		data[IS_INITIALIZED_OFFSET] = 1;
+		// `AccountType::Mint`.
+		data.push(1);
 		for (extension_type, payload) in entries {
 			data.extend_from_slice(&extension_type.to_le_bytes());
 			data.extend_from_slice(
@@ -284,97 +173,161 @@ mod tests {
 		data
 	}
 
-	fn decode(
-		data: &[u8],
-	) -> Result<Option<TransferFeeConfig>, TransferFeeDecodeError> {
-		decode_transfer_fee_config(data, &TOKEN_2022_PROGRAM_ID)
-	}
-
-	fn expected() -> Option<TransferFeeConfig> {
-		Some(TransferFeeConfig {
-			authority: Some(Address::new_from_array(AUTHORITY)),
-			older: OLDER,
-			newer: NEWER,
-		})
+	fn fee(data: &[u8]) -> Result<Option<MintFee>, ProgramError> {
+		mint_fee_at_epoch(data, &TOKEN_2022_PROGRAM_ID, 7)
 	}
 
 	#[test]
 	fn the_walk_finds_the_config_wherever_it_sits() {
-		let entry = (TRANSFER_FEE_CONFIG_TYPE, default_fee_payload());
-
-		let mut first = vec![entry.clone()];
-		first.extend(other_extensions());
-		assert_eq!(decode(&tlv_image(&first)), Ok(expected()));
-
-		let mut middle = other_extensions();
-		middle.insert(1, entry.clone());
-		assert_eq!(decode(&tlv_image(&middle)), Ok(expected()));
-
-		let mut last = other_extensions();
-		last.push(entry);
-		assert_eq!(decode(&tlv_image(&last)), Ok(expected()));
+		for at in 0..=2 {
+			let mut entries = other_extensions();
+			entries.insert(at, (FEE_TYPE, fee_payload(None)));
+			assert_eq!(fee(&tlv_image(&entries)), Ok(NEWER), "at {at}");
+		}
 	}
 
 	#[test]
-	fn a_revoked_authority_reads_as_none() {
-		let image = tlv_image(&[(
-			TRANSFER_FEE_CONFIG_TYPE,
-			fee_payload(None, OLDER, NEWER),
-		)]);
-
+	fn the_owner_picks_the_reader() {
+		let image = tlv_image(&[(FEE_TYPE, fee_payload(None))]);
+		assert_eq!(fee(&image), Ok(NEWER));
+		assert_eq!(mint_fee_at_epoch(&image, &TOKEN_PROGRAM_ID, 7), Ok(None));
 		assert_eq!(
-			decode(&image),
-			Ok(Some(TransferFeeConfig {
-				authority: None,
-				older: OLDER,
-				newer: NEWER,
-			}))
+			mint_fee_at_epoch(&image, &crate::constants::SYSTEM_PROGRAM_ID, 7),
+			Err(ProgramError::IncorrectProgramId)
 		);
 	}
 
 	#[test]
-	fn the_terminator_ends_the_walk() {
-		let mut image = tlv_image(&other_extensions());
-		image.extend(core::iter::repeat_n(0_u8, 512));
-
-		assert_eq!(decode(&image), Ok(None));
+	fn the_newer_entry_applies_from_its_own_epoch() {
+		let image = tlv_image(&[(FEE_TYPE, fee_payload(None))]);
+		assert_eq!(
+			mint_fee_at_epoch(&image, &TOKEN_2022_PROGRAM_ID, 6),
+			Ok(Some(MintFee {
+				bps: 100,
+				maximum_fee: 1_000,
+			}))
+		);
+		assert_eq!(fee(&image), Ok(NEWER));
 	}
 
 	#[test]
-	fn a_region_ending_on_a_boundary_carries_no_config() {
-		assert_eq!(decode(&tlv_image(&other_extensions())), Ok(None));
+	fn a_revoked_authority_reads_as_none() {
+		for authority in [None, Some(Address::new_from_array([9; 32]))] {
+			let image = tlv_image(&[(FEE_TYPE, fee_payload(authority))]);
+			let mint = mint_extensions(&image, &TOKEN_2022_PROGRAM_ID)
+				.unwrap()
+				.unwrap();
+			let config =
+				extension::<TransferFeeConfig>(&mint).unwrap().unwrap();
+			assert_eq!(
+				Option::from(config.transfer_fee_config_authority),
+				authority
+			);
+		}
 	}
 
 	#[test]
 	fn a_bare_mint_has_no_tlv_region_to_walk() {
-		assert_eq!(decode(&[0_u8; MINT_BASE_LEN]), Ok(None));
+		let mut bare = tlv_image(&[]);
+		bare.truncate(82);
+		assert_eq!(fee(&bare), Ok(None));
+		bare[IS_INITIALIZED_OFFSET] = 0;
+		assert_eq!(fee(&bare), Err(ProgramError::UninitializedAccount));
+	}
+
+	/// Extensions that total `Multisig::LEN` get two bytes of padding. SPL
+	/// reads one trailing byte as slack.
+	#[test]
+	fn a_region_that_ends_cleanly_carries_no_config() {
+		for tail in [
+			vec![],
+			vec![0],
+			vec![0; 2],
+			vec![0; 3],
+			vec![0; 512],
+			vec![7],
+		] {
+			let mut image = tlv_image(&other_extensions());
+			image.extend_from_slice(&tail);
+			assert_eq!(fee(&image), Ok(None), "tail {tail:?}");
+		}
+	}
+
+	/// Token-2022 also stops at the first match. It does not read the entries
+	/// after it.
+	#[test]
+	fn a_cut_entry_past_the_config_is_not_read() {
+		let mut image = tlv_image(&[(FEE_TYPE, fee_payload(None))]);
+		image.extend_from_slice(&[18, 0, 64, 0]);
+		assert_eq!(fee(&image), Ok(NEWER));
+	}
+
+	/// An account extension on a mint is a caller error, not an absent
+	/// extension.
+	#[test]
+	fn an_account_extension_is_not_read_off_a_mint() {
+		let image = tlv_image(&other_extensions());
+		let mint = mint_extensions(&image, &TOKEN_2022_PROGRAM_ID)
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			extension::<TransferFeeAmount>(&mint),
+			Err(ProgramError::InvalidAccountData)
+		);
+	}
+
+	/// SPL's `get_extension_types` refuses unknown types. The region check must
+	/// not use it.
+	#[test]
+	fn a_future_extension_type_leaves_the_mint_readable() {
+		let future = (FUTURE_TYPE, vec![0; 16]);
+		let fee_free = tlv_image(&[(18, vec![0; 64]), future.clone()]);
+		let mint = mint_extensions(&fee_free, &TOKEN_2022_PROGRAM_ID)
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			mint.get_extension_types(),
+			Err(ProgramError::InvalidAccountData)
+		);
+		assert_eq!(extension::<TransferFeeConfig>(&mint), Ok(None));
+		let fee_after = tlv_image(&[future, (FEE_TYPE, fee_payload(None))]);
+		assert_eq!(fee(&fee_after), Ok(NEWER));
 	}
 
 	#[test]
-	fn a_truncated_header_is_malformed() {
-		let mut image = tlv_image(&other_extensions());
-		image.truncate(TLV_START + TLV_HEADER_LEN + 64 + 2);
-
-		assert_eq!(decode(&image), Err(TransferFeeDecodeError::Malformed));
-	}
-
-	#[test]
-	fn a_length_running_past_the_buffer_is_malformed() {
-		let mut image = tlv_image(&[(18, vec![0; 64])]);
-		image.truncate(TLV_START + TLV_HEADER_LEN + 32);
-
-		assert_eq!(decode(&image), Err(TransferFeeDecodeError::Malformed));
+	fn a_cut_region_is_malformed() {
+		let mut short = tlv_image(&[]);
+		short.truncate(ACCOUNT_TYPE_OFFSET);
+		let mut header = tlv_image(&other_extensions());
+		header.truncate(TLV_START + 4 + 64 + 2);
+		let mut overrun = tlv_image(&[(18, vec![0; 64])]);
+		overrun.truncate(TLV_START + 4 + 32);
+		let mut payload = tlv_image(&other_extensions());
+		payload.extend_from_slice(&[18, 0, 64, 0]);
+		let mut config = tlv_image(&[(FEE_TYPE, fee_payload(None))]);
+		config.pop();
+		for (label, image) in [
+			("no account type", short),
+			("cut header", header),
+			("length past the end", overrun),
+			("payload never arrives", payload),
+			("config payload cut", config),
+		] {
+			assert_eq!(
+				fee(&image),
+				Err(ProgramError::InvalidAccountData),
+				"{label}"
+			);
+		}
 	}
 
 	#[test]
 	fn a_config_payload_of_the_wrong_length_is_malformed() {
-		for length in [TRANSFER_FEE_CONFIG_LEN - 8, TRANSFER_FEE_CONFIG_LEN + 8]
-		{
-			let image =
-				tlv_image(&[(TRANSFER_FEE_CONFIG_TYPE, vec![0; length])]);
+		for length in [100_usize, 116] {
+			let image = tlv_image(&[(FEE_TYPE, vec![0; length])]);
 			assert_eq!(
-				decode(&image),
-				Err(TransferFeeDecodeError::Malformed),
+				fee(&image),
+				Err(ProgramError::InvalidArgument),
 				"payload length {length}"
 			);
 		}
@@ -382,111 +335,9 @@ mod tests {
 
 	#[test]
 	fn a_non_mint_account_type_is_malformed() {
-		let mut image =
-			tlv_image(&[(TRANSFER_FEE_CONFIG_TYPE, default_fee_payload())]);
-		image.splice(ACCOUNT_TYPE_OFFSET..TLV_START, core::iter::once(2_u8));
-
-		assert_eq!(decode(&image), Err(TransferFeeDecodeError::Malformed));
-	}
-
-	#[test]
-	fn a_length_short_of_the_tlv_region_is_malformed() {
-		for length in [MINT_BASE_LEN + 1, ACCOUNT_TYPE_OFFSET] {
-			assert_eq!(
-				decode(&vec![0_u8; length]),
-				Err(TransferFeeDecodeError::Malformed),
-				"account length {length}"
-			);
-		}
-	}
-
-	#[test]
-	fn an_unknown_owner_is_rejected() {
-		let image =
-			tlv_image(&[(TRANSFER_FEE_CONFIG_TYPE, default_fee_payload())]);
-
-		assert_eq!(
-			decode_transfer_fee_config(
-				&image,
-				&crate::constants::SYSTEM_PROGRAM_ID
-			),
-			Err(TransferFeeDecodeError::UnknownOwner)
-		);
-	}
-
-	#[test]
-	fn a_classic_owner_short_circuits_the_walk() {
-		let image =
-			tlv_image(&[(TRANSFER_FEE_CONFIG_TYPE, default_fee_payload())]);
-
-		assert_eq!(
-			decode_transfer_fee_config(&image, &TOKEN_PROGRAM_ID),
-			Ok(None)
-		);
-	}
-
-	/// Mainnet fixtures never change rate across epochs; this test does.
-	#[test]
-	fn mint_fee_at_epoch_reads_the_entry_for_the_epoch() {
-		let image =
-			tlv_image(&[(TRANSFER_FEE_CONFIG_TYPE, default_fee_payload())]);
-
-		assert_eq!(
-			mint_fee_at_epoch(&image, &TOKEN_2022_PROGRAM_ID, NEWER.epoch - 1),
-			Ok(Some(MintFee {
-				bps: OLDER.basis_points,
-				maximum_fee: OLDER.maximum_fee,
-			}))
-		);
-		assert_eq!(
-			mint_fee_at_epoch(&image, &TOKEN_2022_PROGRAM_ID, NEWER.epoch),
-			Ok(Some(MintFee {
-				bps: NEWER.basis_points,
-				maximum_fee: NEWER.maximum_fee,
-			}))
-		);
-	}
-
-	#[test]
-	fn mint_extensions_lists_every_entry_in_order() {
-		let mut entries = other_extensions();
-		entries.insert(1, (TRANSFER_FEE_CONFIG_TYPE, default_fee_payload()));
-		let mut image = tlv_image(&entries);
-		image.extend(core::iter::repeat_n(0_u8, 64));
-
-		let extensions =
-			mint_extensions(&image, &TOKEN_2022_PROGRAM_ID).unwrap();
-		let expected: Vec<(u16, &[u8])> = entries
-			.iter()
-			.map(|(extension_type, payload)| {
-				(*extension_type, payload.as_slice())
-			})
-			.collect();
-		assert_eq!(extensions, expected);
-		assert_eq!(mint_extensions(&image, &TOKEN_PROGRAM_ID), Ok(Vec::new()));
-	}
-
-	/// SPL's walk ends on a tail too short for a type, or on a zero type too
-	/// short for a length: a mint whose extensions total `Multisig::LEN` is
-	/// allocated two bytes past them.
-	#[test]
-	fn a_short_zero_tail_ends_the_walk() {
-		for tail in 1..TLV_HEADER_LEN {
-			let mut image =
-				tlv_image(&[(TRANSFER_FEE_CONFIG_TYPE, default_fee_payload())]);
-			image.extend(core::iter::repeat_n(0_u8, tail));
-
-			assert_eq!(decode(&image), Ok(expected()), "tail of {tail}");
-		}
-	}
-
-	/// Every entry must be whole, including those after the fee config.
-	#[test]
-	fn a_cut_entry_after_the_config_is_malformed() {
-		let mut image =
-			tlv_image(&[(TRANSFER_FEE_CONFIG_TYPE, default_fee_payload())]);
-		image.extend_from_slice(&[18, 0, 64, 0]);
-
-		assert_eq!(decode(&image), Err(TransferFeeDecodeError::Malformed));
+		let mut image = tlv_image(&[(FEE_TYPE, fee_payload(None))]);
+		// `AccountType::Account`.
+		image[ACCOUNT_TYPE_OFFSET] = 2;
+		assert_eq!(fee(&image), Err(ProgramError::InvalidAccountData));
 	}
 }
