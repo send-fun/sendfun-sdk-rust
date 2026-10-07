@@ -70,11 +70,7 @@ pub struct BondingCurve {
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
 	)]
 	pub coin_creator: Address,
-	#[cfg_attr(
-		feature = "serde",
-		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
-	)]
-	pub creator_fee_config: Address,
+	pub padding0: [u64; 4],
 	#[cfg_attr(
 		feature = "serde",
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
@@ -130,18 +126,21 @@ pub struct BondingCurve {
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
 	)]
 	pub platform_config: Address,
+	pub creator_fee_mode: u8,
+	pub creator_fee_bps: u16,
+	pub dex_creator_fee_bps: u16,
 	#[cfg_attr(
 		feature = "serde",
 		serde(with = "serde_with::As::<serde_with::Bytes>")
 	)]
-	pub reserved: [u8; 64],
+	pub reserved: [u8; 256],
 }
 
 pub const BONDING_CURVE_DISCRIMINATOR: [u8; 8] =
 	[23, 183, 248, 55, 96, 216, 172, 96];
 
 impl BondingCurve {
-	pub const LEN: usize = 421;
+	pub const LEN: usize = 618;
 
 	#[inline(always)]
 	pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {

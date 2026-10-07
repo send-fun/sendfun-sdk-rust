@@ -54,11 +54,7 @@ pub struct MigrateEvent {
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
 	)]
 	pub coin_creator: Address,
-	#[cfg_attr(
-		feature = "serde",
-		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
-	)]
-	pub creator_fee_config: Address,
+	pub padding0: [u64; 4],
 	#[cfg_attr(
 		feature = "serde",
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")

@@ -132,24 +132,6 @@ mod tests {
 		}
 
 		#[test]
-		fn nexus_creator_fee_config_pda() {
-			let quote = address!("So11111111111111111111111111111111111111112");
-			let (addr1, _) =
-				crate::nexus::pda::find_creator_fee_config_pda_from_id(
-					"wallet",
-					"SomeCreator",
-					&quote,
-				);
-			let (addr2, _) =
-				crate::nexus::pda::find_creator_fee_config_pda_from_id(
-					"twitter",
-					"SomeCreator",
-					&quote,
-				);
-			assert_ne!(addr1, addr2);
-		}
-
-		#[test]
 		fn event_authority_pdas_differ_per_program() {
 			let (lp, _) = crate::launchpad::pda::find_event_authority_pda();
 			let (dex, _) = crate::dex::pda::find_event_authority_pda();
@@ -365,26 +347,6 @@ mod tests {
 	}
 
 	#[test]
-	fn nexus_find_creator_fee_config_pda_from_id_matches_hash_derivation() {
-		use solana_address::address;
-		let quote = address!("So11111111111111111111111111111111111111112");
-		let creator_hash =
-			crate::utils::creator_hash_from_id("wallet", "SomeCreator");
-		let (addr1, bump1) =
-			crate::nexus::pda::find_creator_fee_config_pda_from_id(
-				"wallet",
-				"SomeCreator",
-				&quote,
-			);
-		let (addr2, bump2) = crate::nexus::pda::find_creator_fee_config_pda(
-			&creator_hash,
-			&quote,
-		);
-		assert_eq!(addr1, addr2);
-		assert_eq!(bump1, bump2);
-	}
-
-	#[test]
 	fn bonding_curve_status_values() {
 		assert_eq!(
 			crate::launchpad::types::BondingCurveStatus::Funding as u8,
@@ -415,11 +377,11 @@ mod tests {
 		let fees = crate::nexus::types::LaunchpadFees {
 			creation_fee_cents: 0,
 			protocol_fee_bps: 100,
-			creator_fee_bps: 50,
+			max_creator_fee_bps: 50,
 			fee_decay_seconds: 0,
 			fee_decay_start_bps: 0,
 		};
-		assert_eq!(fees.total_fee_bps(), Some(150));
+		assert_eq!(fees.total_fee_bps(30), Some(130));
 	}
 
 	#[test]
@@ -428,11 +390,11 @@ mod tests {
 			creation_fee_cents: 0,
 			protocol_fee_bps: 80,
 			lp_fee_bps: 30,
-			creator_fee_bps: 40,
+			max_creator_fee_bps: 40,
 			fee_decay_seconds: 0,
 			fee_decay_start_bps: 0,
 		};
-		assert_eq!(fees.total_fee_bps(), Some(150));
+		assert_eq!(fees.total_fee_bps(25), Some(135));
 	}
 
 	mod from_account {
@@ -467,7 +429,7 @@ mod tests {
 				quote_mint: Address::new_from_array([2; 32]),
 				quote_decimals: 9,
 				coin_creator: Address::new_from_array([3; 32]),
-				creator_fee_config: Address::new_from_array([4; 32]),
+				padding0: [0x0404_0404_0404_0404; 4],
 				partner: Address::new_from_array([5; 32]),
 				base_vault: Address::new_from_array([6; 32]),
 				quote_vault: Address::new_from_array([7; 32]),
@@ -479,7 +441,10 @@ mod tests {
 				protocol_owed: 0,
 				creator_owed: 0,
 				platform_config: Address::new_from_array([8; 32]),
-				reserved: [0; 64],
+				creator_fee_mode: 0,
+				creator_fee_bps: 0,
+				dex_creator_fee_bps: 0,
+				reserved: [0; 256],
 			}
 		}
 

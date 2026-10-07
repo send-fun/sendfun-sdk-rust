@@ -48,14 +48,18 @@ pub struct UserStakePosition {
 	pub amount: u64,
 	pub stake_version: u32,
 	pub settled_count: u16,
-	pub reserved: [u8; 32],
+	#[cfg_attr(
+		feature = "serde",
+		serde(with = "serde_with::As::<serde_with::Bytes>")
+	)]
+	pub reserved: [u8; 128],
 }
 
 pub const USER_STAKE_POSITION_DISCRIMINATOR: [u8; 8] =
 	[123, 46, 248, 17, 240, 135, 201, 17];
 
 impl UserStakePosition {
-	pub const LEN: usize = 120;
+	pub const LEN: usize = 216;
 
 	#[inline(always)]
 	pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {

@@ -21,6 +21,7 @@
 //!
 
 pub mod bonding_curve;
+pub mod creator_fee_config;
 pub mod event_authority;
 pub mod global_config;
 pub mod migration_authority;
@@ -28,6 +29,7 @@ pub mod reward_accrual;
 pub mod wsol_reward_accrual;
 
 pub use self::bonding_curve::*;
+pub use self::creator_fee_config::*;
 pub use self::event_authority::*;
 pub use self::global_config::*;
 pub use self::migration_authority::*;

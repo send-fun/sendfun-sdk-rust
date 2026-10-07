@@ -21,7 +21,6 @@
 //!
 
 pub mod alt_registry;
-pub mod creator_fee_config;
 pub mod default_fee_preset;
 pub mod default_partner;
 pub mod default_partner_metadata;
@@ -36,7 +35,6 @@ pub mod user_reward_debt;
 pub mod user_stake_position;
 
 pub use self::alt_registry::*;
-pub use self::creator_fee_config::*;
 pub use self::default_fee_preset::*;
 pub use self::default_partner::*;
 pub use self::default_partner_metadata::*;

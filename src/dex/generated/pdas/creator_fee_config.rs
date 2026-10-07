@@ -22,37 +22,37 @@
 
 use solana_address::Address;
 
-use crate::nexus::generated::SEND_NEXUS_ID;
+use crate::dex::generated::SEND_DEX_ID;
 
 pub const CREATOR_FEE_CONFIG_SEED: &'static [u8] = &[
-	99, 114, 101, 97, 116, 111, 114, 95, 102, 101, 101, 95, 98, 97, 108, 97,
-	110, 99, 101,
+	99, 114, 101, 97, 116, 111, 114, 95, 102, 101, 101, 95, 99, 111, 110, 102,
+	105, 103,
 ];
 pub fn create_creator_fee_config_pda(
-	creator_hash: Address,
+	base_mint: Address,
 	quote_mint: Address,
 	bump: u8,
 ) -> Result<solana_address::Address, solana_address::error::AddressError> {
 	solana_address::Address::create_program_address(
 		&[
 			CREATOR_FEE_CONFIG_SEED,
-			creator_hash.as_ref(),
+			base_mint.as_ref(),
 			quote_mint.as_ref(),
 			&[bump],
 		],
-		&SEND_NEXUS_ID,
+		&SEND_DEX_ID,
 	)
 }
 pub fn find_creator_fee_config_pda(
-	creator_hash: &Address,
+	base_mint: &Address,
 	quote_mint: &Address,
 ) -> (solana_address::Address, u8) {
 	solana_address::Address::find_program_address(
 		&[
 			CREATOR_FEE_CONFIG_SEED,
-			creator_hash.as_ref(),
+			base_mint.as_ref(),
 			quote_mint.as_ref(),
 		],
-		&SEND_NEXUS_ID,
+		&SEND_DEX_ID,
 	)
 }

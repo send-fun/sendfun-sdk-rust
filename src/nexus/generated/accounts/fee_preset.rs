@@ -42,7 +42,11 @@ pub struct FeePreset {
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
 	)]
 	pub platform_config: Address,
-	pub reserved: [u8; 32],
+	#[cfg_attr(
+		feature = "serde",
+		serde(with = "serde_with::As::<serde_with::Bytes>")
+	)]
+	pub reserved: [u8; 64],
 }
 
 pub const FEE_PRESET_DISCRIMINATOR: [u8; 8] =

@@ -1367,7 +1367,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sendfun-sdk"
-version = "2.0.1"
+version = "3.0.0"
 dependencies = [
  "anchor-lang",
  "borsh",
@@ -1376,11 +1376,9 @@ dependencies = [
  "num-traits",
  "serde",
  "serde_with",
- "sha2 0.10.9",
  "solana-address 2.7.0",
  "solana-instruction",
  "solana-program",
- "solana-sha256-hasher",
  "spl-discriminator",
  "spl-tlv-account-resolution",
  "spl-token-2022-interface",

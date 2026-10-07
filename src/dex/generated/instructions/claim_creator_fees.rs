@@ -63,7 +63,7 @@ impl ClaimCreatorFees {
 		));
 		accounts.push(solana_instruction::AccountMeta::new(self.payer, true));
 		accounts.push(solana_instruction::AccountMeta::new(self.pool, false));
-		accounts.push(solana_instruction::AccountMeta::new_readonly(
+		accounts.push(solana_instruction::AccountMeta::new(
 			self.creator_fee_config,
 			false,
 		));
@@ -154,7 +154,7 @@ impl Default for ClaimCreatorFeesInstructionData {
 ///   0. `[signer]` claimer
 ///   1. `[writable, signer]` payer
 ///   2. `[writable, optional]` pool (default to PDA derived from 'pool')
-///   3. `[]` creator_fee_config
+///   3. `[writable, optional]` creator_fee_config (default to PDA derived from 'creatorFeeConfig')
 ///   4. `[]` nexus_global_config (fixed to '3bycfBeRULfXYqcg3DmiYFBjv6mMVidMuqKdFZJTGdNr')
 ///   5. `[]` base_mint
 ///   6. `[]` quote_mint
@@ -171,7 +171,7 @@ pub struct ClaimCreatorFeesBuilder {
 	claimer: solana_address::Address,
 	payer: solana_address::Address,
 	pool: Option<solana_address::Address>,
-	creator_fee_config: solana_address::Address,
+	creator_fee_config: Option<solana_address::Address>,
 	base_mint: solana_address::Address,
 	quote_mint: solana_address::Address,
 	quote_vault: Option<solana_address::Address>,
@@ -185,7 +185,6 @@ impl ClaimCreatorFeesBuilder {
 	pub fn new(
 		claimer: solana_address::Address,
 		payer: solana_address::Address,
-		creator_fee_config: solana_address::Address,
 		base_mint: solana_address::Address,
 		quote_mint: solana_address::Address,
 		destination_owner: solana_address::Address,
@@ -195,7 +194,7 @@ impl ClaimCreatorFeesBuilder {
 			claimer,
 			payer,
 			pool: None,
-			creator_fee_config,
+			creator_fee_config: None,
 			base_mint,
 			quote_mint,
 			quote_vault: None,
@@ -209,6 +208,15 @@ impl ClaimCreatorFeesBuilder {
 	#[inline(always)]
 	pub fn pool(&mut self, pool: solana_address::Address) -> &mut Self {
 		self.pool = Some(pool);
+		self
+	}
+	/// `[optional account, default to PDA derived from 'creatorFeeConfig']`
+	#[inline(always)]
+	pub fn creator_fee_config(
+		&mut self,
+		creator_fee_config: solana_address::Address,
+	) -> &mut Self {
+		self.creator_fee_config = Some(creator_fee_config);
 		self
 	}
 	/// `[optional account, default to PDA derived from 'quoteVault']`
@@ -260,7 +268,13 @@ impl ClaimCreatorFeesBuilder {
 			)
 			.0
 		});
-		let creator_fee_config = self.creator_fee_config;
+		let creator_fee_config = self.creator_fee_config.unwrap_or_else(|| {
+			crate::dex::generated::pdas::find_creator_fee_config_pda(
+				&self.base_mint,
+				&self.quote_mint,
+			)
+			.0
+		});
 		let nexus_global_config = solana_address::address!(
 			"3bycfBeRULfXYqcg3DmiYFBjv6mMVidMuqKdFZJTGdNr"
 		);
@@ -433,7 +447,7 @@ impl<'a, 'b> ClaimCreatorFeesCpi<'a, 'b> {
 			.push(solana_instruction::AccountMeta::new(*self.payer.key, true));
 		accounts
 			.push(solana_instruction::AccountMeta::new(*self.pool.key, false));
-		accounts.push(solana_instruction::AccountMeta::new_readonly(
+		accounts.push(solana_instruction::AccountMeta::new(
 			*self.creator_fee_config.key,
 			false,
 		));
@@ -536,7 +550,7 @@ impl<'a, 'b> ClaimCreatorFeesCpi<'a, 'b> {
 ///   0. `[signer]` claimer
 ///   1. `[writable, signer]` payer
 ///   2. `[writable]` pool
-///   3. `[]` creator_fee_config
+///   3. `[writable]` creator_fee_config
 ///   4. `[]` nexus_global_config
 ///   5. `[]` base_mint
 ///   6. `[]` quote_mint

@@ -10,18 +10,20 @@ use solana_address::Address;
 pub struct BuildCreateTokenParams<'a> {
 	pub user: &'a Address,
 	pub payer: Option<&'a Address>,
+	/// The wallet that claims the creator fees.
 	pub coin_creator: &'a Address,
 	pub base_mint: &'a Address,
 	pub quote_mint: &'a Address,
 	pub partner: &'a Address,
-	/// Stored on the bonding curve. Seeds `partner_config`.
 	pub platform_config: &'a Address,
 	pub quote_token_program: &'a Address,
-	pub creator_platform: &'a str,
-	pub creator_id: &'a str,
 	pub name: &'a str,
 	pub symbol: &'a str,
 	pub uri: &'a str,
+	pub creator_fee_mode: u8,
+	pub creator_fee_bps: u16,
+	/// The creator fee of the pool after migration, in bps.
+	pub dex_creator_fee_bps: u16,
 }
 
 /// `base_mint` must be the address of a new keypair. Sign the transaction with
@@ -30,8 +32,6 @@ pub struct BuildCreateTokenParams<'a> {
 pub fn build_create_token_instruction(
 	p: &BuildCreateTokenParams<'_>,
 ) -> solana_instruction::Instruction {
-	let creator_hash =
-		crate::utils::creator_hash_from_id(p.creator_platform, p.creator_id);
 	let (bonding_curve, _) =
 		super::pda::find_bonding_curve_pda(p.base_mint, p.quote_mint);
 	let (base_vault, _) = crate::utils::find_associated_token_pda(
@@ -44,11 +44,6 @@ pub fn build_create_token_instruction(
 		p.quote_mint,
 		p.quote_token_program,
 	);
-	let (creator_fee_config, _) =
-		crate::nexus::pda::find_creator_fee_config_pda(
-			&creator_hash,
-			p.quote_mint,
-		);
 	let (partner_config, _) = crate::nexus::pda::find_partner_config_pda(
 		p.platform_config,
 		p.partner,
@@ -62,10 +57,10 @@ pub fn build_create_token_instruction(
 		p.quote_mint,
 		p.quote_token_program,
 	);
-	// `create_token` creates it if it does not exist. The creation fee goes to
-	// the WSOL accrual.
 	let (reward_accrual, _) =
 		super::generated::pdas::find_reward_accrual_pda(p.quote_mint);
+	let (creator_fee_config, _) =
+		super::pda::find_creator_fee_config_pda(p.base_mint, p.quote_mint);
 
 	let create = super::instructions::CreateToken {
 		user: *p.user,
@@ -100,12 +95,12 @@ pub fn build_create_token_instruction(
 	};
 	create.instruction(super::instructions::CreateTokenInstructionArgs {
 		platform_config: *p.platform_config,
-		creator_platform: p.creator_platform.to_owned(),
-		creator_id: p.creator_id.to_owned(),
-		creator_hash,
 		name: p.name.to_owned(),
 		symbol: p.symbol.to_owned(),
 		uri: p.uri.to_owned(),
+		creator_fee_mode: p.creator_fee_mode,
+		creator_fee_bps: p.creator_fee_bps,
+		dex_creator_fee_bps: p.dex_creator_fee_bps,
 	})
 }
 
@@ -118,7 +113,12 @@ mod tests {
 		DEFAULT_PARTNER, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, WSOL_MINT,
 	};
 
+	const COIN_CREATOR_INDEX: usize = 2;
+	const CREATOR_FEE_CONFIG_INDEX: usize = 9;
 	const PARTNER_INDEX: usize = 12;
+
+	/// Differs from `user`.
+	const COIN_CREATOR: Address = Address::new_from_array([5u8; 32]);
 
 	/// A Token-2022 quote mint that the creator does not hold.
 	const TSLAX_MINT: Address =
@@ -135,17 +135,18 @@ mod tests {
 		build_create_token_instruction(&BuildCreateTokenParams {
 			user: &user,
 			payer: None,
-			coin_creator: &user,
+			coin_creator: &COIN_CREATOR,
 			base_mint: &base_mint,
 			quote_mint,
 			partner,
 			platform_config: &platform_config,
 			quote_token_program,
-			creator_platform: "wallet",
-			creator_id: "11111111111111111111111111111111",
 			name: "Sample Token",
 			symbol: "SMPL",
 			uri: "https://example.com/meta.json",
+			creator_fee_mode: 0,
+			creator_fee_bps: 0,
+			dex_creator_fee_bps: 0,
 		})
 	}
 
@@ -191,7 +192,6 @@ mod tests {
 		);
 		assert!(!ix.accounts.iter().any(|m| m.pubkey == user_quote_ata));
 
-		// The creation fee goes to the WSOL vault.
 		let (staking_wsol_vault, _) = crate::utils::find_associated_token_pda(
 			&crate::nexus::pda::STAKING_CONFIG_ADDRESS,
 			&WSOL_MINT,
@@ -207,5 +207,59 @@ mod tests {
 
 		assert!(ix.accounts[0].is_writable);
 		assert!(ix.accounts[0].is_signer);
+	}
+
+	#[test]
+	fn coin_creator_is_the_named_wallet_and_does_not_sign() {
+		let ix = wsol_instruction(&DEFAULT_PARTNER);
+
+		assert_eq!(ix.accounts[COIN_CREATOR_INDEX].pubkey, COIN_CREATOR);
+		assert!(!ix.accounts[COIN_CREATOR_INDEX].is_signer);
+		assert!(!ix.accounts[COIN_CREATOR_INDEX].is_writable);
+	}
+
+	#[test]
+	fn the_creator_fee_config_slot_is_the_curves_pda() {
+		let ix = sample_instruction(
+			&DEFAULT_PARTNER,
+			&TSLAX_MINT,
+			&TOKEN_2022_PROGRAM_ID,
+		);
+		let base_mint = Address::new_from_array([2u8; 32]);
+		let (derived, _) = Address::find_program_address(
+			&[
+				b"creator_fee_config",
+				base_mint.as_ref(),
+				TSLAX_MINT.as_ref(),
+			],
+			&crate::constants::LAUNCHPAD_PROGRAM_ID,
+		);
+
+		let slot = &ix.accounts[CREATOR_FEE_CONFIG_INDEX];
+		assert_eq!(slot.pubkey, derived);
+		assert_eq!(
+			slot.pubkey,
+			solana_address::address!(
+				"7wnaFX6M9fKrZmkuQitz2eKYyYDAbfAEZWEc4VagHYz1"
+			),
+		);
+		assert!(!slot.is_signer);
+		assert!(slot.is_writable);
+	}
+
+	#[test]
+	fn name_follows_platform_config_at_offset_40() {
+		let ix = wsol_instruction(&DEFAULT_PARTNER);
+
+		assert_eq!(ix.data[8..40], [4u8; 32]);
+		assert_eq!(ix.data[40..44], 12u32.to_le_bytes());
+		assert_eq!(&ix.data[44..56], b"Sample Token");
+		assert_eq!(ix.data[56..60], 4u32.to_le_bytes());
+		assert_eq!(&ix.data[60..64], b"SMPL");
+		assert_eq!(ix.data[64..68], 29u32.to_le_bytes());
+		assert_eq!(&ix.data[68..97], b"https://example.com/meta.json");
+		// `creator_fee_mode`, `creator_fee_bps`, `dex_creator_fee_bps`.
+		assert_eq!(ix.data[97..102], [0u8; 5]);
+		assert_eq!(ix.data.len(), 102);
 	}
 }

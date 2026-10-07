@@ -155,15 +155,21 @@ pub enum SendNexusError {
 	/// 7011 - Nothing to claim
 	#[error("Nothing to claim")]
 	NothingToClaim = 0x1B63,
-	/// 7012 - Creator identity is not a decodable wallet address
-	#[error("Creator identity is not a decodable wallet address")]
-	InvalidCreatorId = 0x1B64,
+	/// 7012 - Unused
+	#[error("Unused")]
+	Unused7012 = 0x1B64,
 	/// 7013 - Quote mint has no USDC price on its nexus reward state
 	#[error("Quote mint has no USDC price on its nexus reward state")]
 	QuoteMintPriceUnset = 0x1B65,
 	/// 7014 - Token-2022 transfer fee schedule cannot settle the exact amount
 	#[error("Token-2022 transfer fee schedule cannot settle the exact amount")]
 	TransferFeeNotSettleable = 0x1B66,
+	/// 7015 - Creator fee exceeds the partner's maximum
+	#[error("Creator fee exceeds the partner's maximum")]
+	CreatorFeeTooHigh = 0x1B67,
+	/// 7016 - Creator fee mode is not allowed by the partner config
+	#[error("Creator fee mode is not allowed by the partner config")]
+	CreatorFeeModeNotAllowed = 0x1B68,
 	/// 7100 - Insufficient liquidity
 	#[error("Insufficient liquidity")]
 	InsufficientLiquidity = 0x1BBC,

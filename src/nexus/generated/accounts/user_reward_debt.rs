@@ -67,14 +67,18 @@ pub struct UserRewardDebt {
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
 	)]
 	pub owed: u64,
-	pub reserved: [u8; 32],
+	#[cfg_attr(
+		feature = "serde",
+		serde(with = "serde_with::As::<serde_with::Bytes>")
+	)]
+	pub reserved: [u8; 64],
 }
 
 pub const USER_REWARD_DEBT_DISCRIMINATOR: [u8; 8] =
 	[92, 166, 184, 23, 127, 201, 251, 148];
 
 impl UserRewardDebt {
-	pub const LEN: usize = 182;
+	pub const LEN: usize = 214;
 
 	#[inline(always)]
 	pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {

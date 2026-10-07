@@ -221,12 +221,12 @@ impl Default for CreateTokenInstructionData {
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct CreateTokenInstructionArgs {
 	pub platform_config: Address,
-	pub creator_platform: String,
-	pub creator_id: String,
-	pub creator_hash: Address,
 	pub name: String,
 	pub symbol: String,
 	pub uri: String,
+	pub creator_fee_mode: u8,
+	pub creator_fee_bps: u16,
+	pub dex_creator_fee_bps: u16,
 }
 
 impl CreateTokenInstructionArgs {
@@ -286,12 +286,12 @@ pub struct CreateTokenBuilder {
 	staking_vault: Option<solana_address::Address>,
 	quote_token_program: solana_address::Address,
 	platform_config: Address,
-	creator_platform: String,
-	creator_id: String,
-	creator_hash: Address,
 	name: String,
 	symbol: String,
 	uri: String,
+	creator_fee_mode: u8,
+	creator_fee_bps: u16,
+	dex_creator_fee_bps: u16,
 	__remaining_accounts: Vec<solana_instruction::AccountMeta>,
 }
 
@@ -305,12 +305,12 @@ impl CreateTokenBuilder {
 		partner: (solana_address::Address, bool),
 		quote_token_program: solana_address::Address,
 		platform_config: Address,
-		creator_platform: String,
-		creator_id: String,
-		creator_hash: Address,
 		name: String,
 		symbol: String,
 		uri: String,
+		creator_fee_mode: u8,
+		creator_fee_bps: u16,
+		dex_creator_fee_bps: u16,
 	) -> Self {
 		Self {
 			user,
@@ -330,12 +330,12 @@ impl CreateTokenBuilder {
 			staking_vault: None,
 			quote_token_program,
 			platform_config,
-			creator_platform,
-			creator_id,
-			creator_hash,
 			name,
 			symbol,
 			uri,
+			creator_fee_mode,
+			creator_fee_bps,
+			dex_creator_fee_bps,
 			__remaining_accounts: Vec::new(),
 		}
 	}
@@ -486,18 +486,9 @@ impl CreateTokenBuilder {
 			.0
 		});
 		let creator_fee_config = self.creator_fee_config.unwrap_or_else(|| {
-			solana_address::Address::find_program_address(
-				&[
-					&[
-						99, 114, 101, 97, 116, 111, 114, 95, 102, 101, 101, 95,
-						98, 97, 108, 97, 110, 99, 101,
-					],
-					self.creator_hash.clone().as_ref(),
-					self.quote_mint.as_ref(),
-				],
-				&solana_address::address!(
-					"7rrCurqdWFesbzwtYPo95fM8waTtVXgXwCom45x1sfNX"
-				),
+			crate::launchpad::generated::pdas::find_creator_fee_config_pda(
+				&self.base_mint,
+				&self.quote_mint,
 			)
 			.0
 		});
@@ -623,12 +614,12 @@ impl CreateTokenBuilder {
 		};
 		let args = CreateTokenInstructionArgs {
 			platform_config: self.platform_config.clone(),
-			creator_platform: self.creator_platform.clone(),
-			creator_id: self.creator_id.clone(),
-			creator_hash: self.creator_hash.clone(),
 			name: self.name.clone(),
 			symbol: self.symbol.clone(),
 			uri: self.uri.clone(),
+			creator_fee_mode: self.creator_fee_mode.clone(),
+			creator_fee_bps: self.creator_fee_bps.clone(),
+			dex_creator_fee_bps: self.dex_creator_fee_bps.clone(),
 		};
 
 		accounts.instruction_with_remaining_accounts(
@@ -1026,12 +1017,12 @@ impl<'a, 'b> CreateTokenCpiBuilder<'a, 'b> {
 		event_authority: &'b solana_program::account_info::AccountInfo<'a>,
 		program: &'b solana_program::account_info::AccountInfo<'a>,
 		platform_config: Address,
-		creator_platform: String,
-		creator_id: String,
-		creator_hash: Address,
 		name: String,
 		symbol: String,
 		uri: String,
+		creator_fee_mode: u8,
+		creator_fee_bps: u16,
+		dex_creator_fee_bps: u16,
 	) -> Self {
 		let instruction = Box::new(CreateTokenCpiBuilderInstruction {
 			__program,
@@ -1064,12 +1055,12 @@ impl<'a, 'b> CreateTokenCpiBuilder<'a, 'b> {
 			event_authority,
 			program,
 			platform_config,
-			creator_platform,
-			creator_id,
-			creator_hash,
 			name,
 			symbol,
 			uri,
+			creator_fee_mode,
+			creator_fee_bps,
+			dex_creator_fee_bps,
 			__remaining_accounts: Vec::new(),
 		});
 		Self { instruction }
@@ -1119,12 +1110,12 @@ impl<'a, 'b> CreateTokenCpiBuilder<'a, 'b> {
 	) -> solana_program::entrypoint::ProgramResult {
 		let args = CreateTokenInstructionArgs {
 			platform_config: self.instruction.platform_config.clone(),
-			creator_platform: self.instruction.creator_platform.clone(),
-			creator_id: self.instruction.creator_id.clone(),
-			creator_hash: self.instruction.creator_hash.clone(),
 			name: self.instruction.name.clone(),
 			symbol: self.instruction.symbol.clone(),
 			uri: self.instruction.uri.clone(),
+			creator_fee_mode: self.instruction.creator_fee_mode.clone(),
+			creator_fee_bps: self.instruction.creator_fee_bps.clone(),
+			dex_creator_fee_bps: self.instruction.dex_creator_fee_bps.clone(),
 		};
 		let instruction = CreateTokenCpi {
 			__program: self.instruction.__program,
@@ -1197,12 +1188,12 @@ struct CreateTokenCpiBuilderInstruction<'a, 'b> {
 	event_authority: &'b solana_program::account_info::AccountInfo<'a>,
 	program: &'b solana_program::account_info::AccountInfo<'a>,
 	platform_config: Address,
-	creator_platform: String,
-	creator_id: String,
-	creator_hash: Address,
 	name: String,
 	symbol: String,
 	uri: String,
+	creator_fee_mode: u8,
+	creator_fee_bps: u16,
+	dex_creator_fee_bps: u16,
 	/// Additional instruction accounts `(AccountInfo, is_writable, is_signer)`.
 	__remaining_accounts: Vec<(
 		&'b solana_program::account_info::AccountInfo<'a>,

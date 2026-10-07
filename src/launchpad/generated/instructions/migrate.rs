@@ -51,6 +51,7 @@ pub struct Migrate {
 	pub system_program: solana_address::Address,
 	pub event_authority: solana_address::Address,
 	pub program: solana_address::Address,
+	pub dex_creator_fee_config: solana_address::Address,
 }
 
 impl Migrate {
@@ -63,7 +64,7 @@ impl Migrate {
 		&self,
 		remaining_accounts: &[solana_instruction::AccountMeta],
 	) -> solana_instruction::Instruction {
-		let mut accounts = Vec::with_capacity(22 + remaining_accounts.len());
+		let mut accounts = Vec::with_capacity(23 + remaining_accounts.len());
 		accounts.push(solana_instruction::AccountMeta::new(self.caller, true));
 		accounts.push(solana_instruction::AccountMeta::new(
 			self.bonding_curve,
@@ -112,7 +113,7 @@ impl Migrate {
 			self.nexus_program,
 			false,
 		));
-		accounts.push(solana_instruction::AccountMeta::new_readonly(
+		accounts.push(solana_instruction::AccountMeta::new(
 			self.creator_fee_config,
 			false,
 		));
@@ -138,6 +139,10 @@ impl Migrate {
 		));
 		accounts.push(solana_instruction::AccountMeta::new_readonly(
 			self.program,
+			false,
+		));
+		accounts.push(solana_instruction::AccountMeta::new(
+			self.dex_creator_fee_config,
 			false,
 		));
 		accounts.extend_from_slice(remaining_accounts);
@@ -195,13 +200,14 @@ impl Default for MigrateInstructionData {
 ///   12. `[writable]` pool_lp_account
 ///   13. `[]` dex_event_authority (fixed to '4pTDYKRFdmxTQYFceGZkzPGd3kb8ShMA9n6XKRaPZn8t')
 ///   14. `[]` nexus_program (fixed to '7rrCurqdWFesbzwtYPo95fM8waTtVXgXwCom45x1sfNX')
-///   15. `[]` creator_fee_config
+///   15. `[writable, optional]` creator_fee_config (default to PDA derived from 'creatorFeeConfig')
 ///   16. `[]` base_token_program (fixed to 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')
 ///   17. `[]` quote_token_program
 ///   18. `[]` associated_token_program (fixed to 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL')
 ///   19. `[]` system_program (fixed to '11111111111111111111111111111111')
 ///   20. `[]` event_authority (fixed to 'FJVebqCthxH6JM8vvkJb7yRYA7Emsib1C1vu4ZePSP3T')
 ///   21. `[]` program (fixed to '5R1uFyEE4oxqkm7hJDqHq6gXaLVF9dxeF3LF4yz1sfLP')
+///   22. `[writable, optional]` dex_creator_fee_config (default to PDA derived from 'dexCreatorFeeConfig')
 #[derive(Clone, Debug)]
 pub struct MigrateBuilder {
 	caller: solana_address::Address,
@@ -215,8 +221,9 @@ pub struct MigrateBuilder {
 	pool_base_vault: solana_address::Address,
 	pool_quote_vault: solana_address::Address,
 	pool_lp_account: solana_address::Address,
-	creator_fee_config: solana_address::Address,
+	creator_fee_config: Option<solana_address::Address>,
 	quote_token_program: solana_address::Address,
+	dex_creator_fee_config: Option<solana_address::Address>,
 	__remaining_accounts: Vec<solana_instruction::AccountMeta>,
 }
 
@@ -228,7 +235,6 @@ impl MigrateBuilder {
 		pool_base_vault: solana_address::Address,
 		pool_quote_vault: solana_address::Address,
 		pool_lp_account: solana_address::Address,
-		creator_fee_config: solana_address::Address,
 		quote_token_program: solana_address::Address,
 	) -> Self {
 		Self {
@@ -243,8 +249,9 @@ impl MigrateBuilder {
 			pool_base_vault,
 			pool_quote_vault,
 			pool_lp_account,
-			creator_fee_config,
+			creator_fee_config: None,
 			quote_token_program,
+			dex_creator_fee_config: None,
 			__remaining_accounts: Vec::new(),
 		}
 	}
@@ -285,6 +292,24 @@ impl MigrateBuilder {
 	#[inline(always)]
 	pub fn lp_mint(&mut self, lp_mint: solana_address::Address) -> &mut Self {
 		self.lp_mint = Some(lp_mint);
+		self
+	}
+	/// `[optional account, default to PDA derived from 'creatorFeeConfig']`
+	#[inline(always)]
+	pub fn creator_fee_config(
+		&mut self,
+		creator_fee_config: solana_address::Address,
+	) -> &mut Self {
+		self.creator_fee_config = Some(creator_fee_config);
+		self
+	}
+	/// `[optional account, default to PDA derived from 'dexCreatorFeeConfig']`
+	#[inline(always)]
+	pub fn dex_creator_fee_config(
+		&mut self,
+		dex_creator_fee_config: solana_address::Address,
+	) -> &mut Self {
+		self.dex_creator_fee_config = Some(dex_creator_fee_config);
 		self
 	}
 	/// Add an additional account to the instruction.
@@ -388,7 +413,13 @@ impl MigrateBuilder {
 		let nexus_program = solana_address::address!(
 			"7rrCurqdWFesbzwtYPo95fM8waTtVXgXwCom45x1sfNX"
 		);
-		let creator_fee_config = self.creator_fee_config;
+		let creator_fee_config = self.creator_fee_config.unwrap_or_else(|| {
+			crate::launchpad::generated::pdas::find_creator_fee_config_pda(
+				&self.base_mint,
+				&self.quote_mint,
+			)
+			.0
+		});
 		let base_token_program = solana_address::address!(
 			"TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 		);
@@ -402,6 +433,23 @@ impl MigrateBuilder {
 		let program = solana_address::address!(
 			"5R1uFyEE4oxqkm7hJDqHq6gXaLVF9dxeF3LF4yz1sfLP"
 		);
+		let dex_creator_fee_config =
+			self.dex_creator_fee_config.unwrap_or_else(|| {
+				solana_address::Address::find_program_address(
+					&[
+						&[
+							99, 114, 101, 97, 116, 111, 114, 95, 102, 101, 101,
+							95, 99, 111, 110, 102, 105, 103,
+						],
+						self.base_mint.as_ref(),
+						self.quote_mint.as_ref(),
+					],
+					&solana_address::address!(
+						"84qj5FPZZdXkQy8mfowyg6RBZ3XKuTds6XS4ZYT1sfDX"
+					),
+				)
+				.0
+			});
 		let accounts = Migrate {
 			caller,
 			bonding_curve,
@@ -425,6 +473,7 @@ impl MigrateBuilder {
 			system_program,
 			event_authority,
 			program,
+			dex_creator_fee_config,
 		};
 
 		accounts.instruction_with_remaining_accounts(&self.__remaining_accounts)
@@ -456,6 +505,8 @@ pub struct MigrateCpiAccounts<'a, 'b> {
 	pub system_program: &'b solana_program::account_info::AccountInfo<'a>,
 	pub event_authority: &'b solana_program::account_info::AccountInfo<'a>,
 	pub program: &'b solana_program::account_info::AccountInfo<'a>,
+	pub dex_creator_fee_config:
+		&'b solana_program::account_info::AccountInfo<'a>,
 }
 
 /// `migrate` CPI instruction.
@@ -485,6 +536,8 @@ pub struct MigrateCpi<'a, 'b> {
 	pub system_program: &'b solana_program::account_info::AccountInfo<'a>,
 	pub event_authority: &'b solana_program::account_info::AccountInfo<'a>,
 	pub program: &'b solana_program::account_info::AccountInfo<'a>,
+	pub dex_creator_fee_config:
+		&'b solana_program::account_info::AccountInfo<'a>,
 }
 
 impl<'a, 'b> MigrateCpi<'a, 'b> {
@@ -516,6 +569,7 @@ impl<'a, 'b> MigrateCpi<'a, 'b> {
 			system_program: accounts.system_program,
 			event_authority: accounts.event_authority,
 			program: accounts.program,
+			dex_creator_fee_config: accounts.dex_creator_fee_config,
 		}
 	}
 	#[inline(always)]
@@ -552,7 +606,7 @@ impl<'a, 'b> MigrateCpi<'a, 'b> {
 			bool,
 		)],
 	) -> solana_program::entrypoint::ProgramResult {
-		let mut accounts = Vec::with_capacity(22 + remaining_accounts.len());
+		let mut accounts = Vec::with_capacity(23 + remaining_accounts.len());
 		accounts
 			.push(solana_instruction::AccountMeta::new(*self.caller.key, true));
 		accounts.push(solana_instruction::AccountMeta::new(
@@ -609,7 +663,7 @@ impl<'a, 'b> MigrateCpi<'a, 'b> {
 			*self.nexus_program.key,
 			false,
 		));
-		accounts.push(solana_instruction::AccountMeta::new_readonly(
+		accounts.push(solana_instruction::AccountMeta::new(
 			*self.creator_fee_config.key,
 			false,
 		));
@@ -637,6 +691,10 @@ impl<'a, 'b> MigrateCpi<'a, 'b> {
 			*self.program.key,
 			false,
 		));
+		accounts.push(solana_instruction::AccountMeta::new(
+			*self.dex_creator_fee_config.key,
+			false,
+		));
 		remaining_accounts.iter().for_each(|remaining_account| {
 			accounts.push(solana_instruction::AccountMeta {
 				pubkey: *remaining_account.0.key,
@@ -652,7 +710,7 @@ impl<'a, 'b> MigrateCpi<'a, 'b> {
 			data,
 		};
 		let mut account_infos =
-			Vec::with_capacity(23 + remaining_accounts.len());
+			Vec::with_capacity(24 + remaining_accounts.len());
 		account_infos.push(self.__program.clone());
 		account_infos.push(self.caller.clone());
 		account_infos.push(self.bonding_curve.clone());
@@ -676,6 +734,7 @@ impl<'a, 'b> MigrateCpi<'a, 'b> {
 		account_infos.push(self.system_program.clone());
 		account_infos.push(self.event_authority.clone());
 		account_infos.push(self.program.clone());
+		account_infos.push(self.dex_creator_fee_config.clone());
 		remaining_accounts.iter().for_each(|remaining_account| {
 			account_infos.push(remaining_account.0.clone())
 		});
@@ -711,13 +770,14 @@ impl<'a, 'b> MigrateCpi<'a, 'b> {
 ///   12. `[writable]` pool_lp_account
 ///   13. `[]` dex_event_authority
 ///   14. `[]` nexus_program
-///   15. `[]` creator_fee_config
+///   15. `[writable]` creator_fee_config
 ///   16. `[]` base_token_program
 ///   17. `[]` quote_token_program
 ///   18. `[]` associated_token_program
 ///   19. `[]` system_program
 ///   20. `[]` event_authority
 ///   21. `[]` program
+///   22. `[writable]` dex_creator_fee_config
 #[derive(Clone, Debug)]
 pub struct MigrateCpiBuilder<'a, 'b> {
 	instruction: Box<MigrateCpiBuilderInstruction<'a, 'b>>,
@@ -750,6 +810,9 @@ impl<'a, 'b> MigrateCpiBuilder<'a, 'b> {
 		system_program: &'b solana_program::account_info::AccountInfo<'a>,
 		event_authority: &'b solana_program::account_info::AccountInfo<'a>,
 		program: &'b solana_program::account_info::AccountInfo<'a>,
+		dex_creator_fee_config: &'b solana_program::account_info::AccountInfo<
+			'a,
+		>,
 	) -> Self {
 		let instruction = Box::new(MigrateCpiBuilderInstruction {
 			__program,
@@ -775,6 +838,7 @@ impl<'a, 'b> MigrateCpiBuilder<'a, 'b> {
 			system_program,
 			event_authority,
 			program,
+			dex_creator_fee_config,
 			__remaining_accounts: Vec::new(),
 		});
 		Self { instruction }
@@ -846,6 +910,7 @@ impl<'a, 'b> MigrateCpiBuilder<'a, 'b> {
 			system_program: self.instruction.system_program,
 			event_authority: self.instruction.event_authority,
 			program: self.instruction.program,
+			dex_creator_fee_config: self.instruction.dex_creator_fee_config,
 		};
 		instruction.invoke_signed_with_remaining_accounts(
 			signers_seeds,
@@ -879,6 +944,7 @@ struct MigrateCpiBuilderInstruction<'a, 'b> {
 	system_program: &'b solana_program::account_info::AccountInfo<'a>,
 	event_authority: &'b solana_program::account_info::AccountInfo<'a>,
 	program: &'b solana_program::account_info::AccountInfo<'a>,
+	dex_creator_fee_config: &'b solana_program::account_info::AccountInfo<'a>,
 	/// Additional instruction accounts `(AccountInfo, is_writable, is_signer)`.
 	__remaining_accounts: Vec<(
 		&'b solana_program::account_info::AccountInfo<'a>,

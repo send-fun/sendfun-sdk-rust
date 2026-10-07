@@ -20,6 +20,7 @@
 //! <https://github.com/codama-idl/codama>
 //!
 
+pub mod creator_fee_config;
 pub mod event_authority;
 pub mod global_config;
 pub mod lp_mint;
@@ -27,6 +28,7 @@ pub mod pool;
 pub mod reward_accrual;
 pub mod wsol_reward_accrual;
 
+pub use self::creator_fee_config::*;
 pub use self::event_authority::*;
 pub use self::global_config::*;
 pub use self::lp_mint::*;

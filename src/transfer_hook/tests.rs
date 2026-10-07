@@ -517,7 +517,10 @@ fn trailing_accounts_merge_by_key_and_refuse_the_trades_own() {
 	assert_eq!(
 		trailing_accounts(
 			&[(Some(&hook), USER_LEG), (None, VAULT_LEG)],
-			&fixed_metas,
+			&TradeOwn {
+				fixed: &fixed_metas,
+				market: &MARKET,
+			},
 			Unloaded::Refuse,
 		)
 		.unwrap(),
@@ -528,7 +531,10 @@ fn trailing_accounts_merge_by_key_and_refuse_the_trades_own() {
 	assert_eq!(
 		trailing_accounts(
 			&[(Some(&hook), USER_LEG), (Some(&writable_rent), VAULT_LEG)],
-			&fixed_metas,
+			&TradeOwn {
+				fixed: &fixed_metas,
+				market: &MARKET,
+			},
 			Unloaded::Refuse,
 		)
 		.unwrap(),
@@ -540,23 +546,43 @@ fn trailing_accounts_merge_by_key_and_refuse_the_trades_own() {
 		]
 	);
 
-	assert!(
-		trailing_accounts(
-			&[(Some(&hook), USER_LEG)],
-			&[AccountMeta::new_readonly(RENT, false)],
-			Unloaded::Refuse,
-		)
-		.is_ok()
-	);
-	// A repeat that is writable on either side fails.
+	// A read-only repeat passes. This includes a trade signer and the
+	// writable market.
+	for fixed in [
+		AccountMeta::new_readonly(RENT, false),
+		AccountMeta::new_readonly(RENT, true),
+		AccountMeta::new(MARKET, false),
+	] {
+		assert_eq!(
+			trailing_accounts(
+				&[(Some(&hook), USER_LEG)],
+				&TradeOwn {
+					fixed: &[fixed],
+					market: &MARKET,
+				},
+				Unloaded::Refuse,
+			)
+			.unwrap(),
+			hook.leg_accounts(&USER_LEG, Unloaded::Refuse).unwrap()
+		);
+	}
+	// Any other repeat that is writable on either side fails. A hook that
+	// wants the market writable fails.
+	let writable_market = loaded(list(&[fixed(MARKET, true)]));
 	for (extras, fixed) in [
-		(&hook, AccountMeta::new(MARKET, false)),
+		(&hook, AccountMeta::new(RENT, false)),
+		(&hook, AccountMeta::new(RENT, true)),
 		(&writable_rent, AccountMeta::new_readonly(RENT, false)),
+		(&writable_market, AccountMeta::new(MARKET, false)),
+		(&writable_market, AccountMeta::new_readonly(MARKET, false)),
 	] {
 		assert_eq!(
 			trailing_accounts(
 				&[(Some(extras), USER_LEG)],
-				&[fixed],
+				&TradeOwn {
+					fixed: &[fixed],
+					market: &MARKET,
+				},
 				Unloaded::Refuse,
 			)
 			.unwrap_err()
@@ -564,16 +590,6 @@ fn trailing_accounts_merge_by_key_and_refuse_the_trades_own() {
 			"transfer hook repeats an account of the trade, writable"
 		);
 	}
-	assert_eq!(
-		trailing_accounts(
-			&[(Some(&hook), USER_LEG)],
-			&[AccountMeta::new_readonly(RENT, true)],
-			Unloaded::Refuse,
-		)
-		.unwrap_err()
-		.to_string(),
-		"transfer hook needs a signer the programs do not forward"
-	);
 }
 
 fn trade() -> TradeAccounts {
@@ -631,6 +647,7 @@ fn screening_unroutes_only_a_clash_every_trader_hits() {
 	let stand_in = trade().with_stand_in_trader();
 	let fixed_metas = [
 		AccountMeta::new_readonly(stand_in.user, true),
+		AccountMeta::new(stand_in.market, false),
 		AccountMeta::new(stand_in.quote_vault, false),
 	];
 	let screened = |extra| {
@@ -649,26 +666,33 @@ fn screening_unroutes_only_a_clash_every_trader_hits() {
 		"transfer hook cannot be resolved ahead of the swap: transfer hook \
 		 repeats an account of the trade, writable"
 	);
-	// On a buy, the source owner is the trader, who signs.
-	assert_eq!(
-		screened(pubkey_data(0, 32, false)).check_routable(Unloaded::Refuse),
-		Err(HookError::Unresolvable(Unresolvable::Clash(
-			Clash::SignerNotForwarded
-		)))
-	);
+	// The transfer owners route read-only: the trader, who signs, and the
+	// market.
+	for extra in [pubkey_data(0, 32, false), pubkey_data(2, 32, false)] {
+		assert_eq!(screened(extra).check_routable(Unloaded::Refuse), Ok(()));
+	}
+	// A hook that wants an owner writable fails.
+	for extra in [pubkey_data(0, 32, true), pubkey_data(2, 32, true)] {
+		assert_eq!(
+			screened(extra).check_routable(Unloaded::Refuse),
+			Err(HookError::Unresolvable(Unresolvable::Clash(
+				Clash::WritableDuplicate
+			)))
+		);
+	}
 
-	let one_wallet = screened(fixed(USER, false));
+	let one_wallet = screened(fixed(SOURCE, false));
 	assert_eq!(one_wallet.check_routable(Unloaded::Refuse), Ok(()));
 	assert_eq!(
 		one_wallet.swap_accounts(
 			HookSwap {
 				trade: &trade(),
 				direction: TradeDirection::Buy,
-				fixed: &[AccountMeta::new_readonly(USER, true)],
+				fixed: &[AccountMeta::new(SOURCE, false)],
 			},
 			Unloaded::Refuse,
 		),
-		Err(HookError::Clash(Clash::SignerNotForwarded))
+		Err(HookError::Clash(Clash::WritableDuplicate))
 	);
 }
 

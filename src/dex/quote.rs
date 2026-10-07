@@ -1,12 +1,13 @@
 use crate::math::amm::{self, AmmInput, BuyArgs, SellArgs};
+use crate::nexus::EffectiveFeeArgs;
 use crate::nexus::types::DexFees;
 use crate::utils::{
 	Landing, MarketQuote, MarketQuoteError, QuoteRequest, TradeDirection,
 	TradeMode,
 };
 
-/// Read `quote_reserves` and `created_at` from the `Pool` account, not from a
-/// vault.
+/// Read `quote_reserves`, `created_at` and `creator_fee_bps` from the `Pool`
+/// account, not from a vault.
 #[derive(Clone, Copy, Debug)]
 pub struct PoolMarket<'a> {
 	/// The base vault's token amount. The program prices from it, not from
@@ -14,9 +15,12 @@ pub struct PoolMarket<'a> {
 	pub base_vault_amount: u64,
 	pub quote_reserves: u64,
 	pub created_at: i64,
-	/// `PartnerConfig.dex` of the trade's partner on the pool's platform.
+	/// `PartnerConfig.dex` of the trade's partner on the pool's platform. It
+	/// sets the protocol rate, the LP rate and the decay.
 	pub fees: &'a DexFees,
 	pub landing: Landing,
+	/// `Pool.creator_fee_bps`, not the partner's `max_creator_fee_bps`.
+	pub creator_fee_bps: u16,
 }
 
 /// Calculates a trade on a DEX pool. The status is not checked: pass an
@@ -27,7 +31,11 @@ pub fn quote(
 ) -> Result<MarketQuote, MarketQuoteError> {
 	let fee_bps = market
 		.fees
-		.effective_fee_bps(market.created_at, market.landing.unix_timestamp)
+		.effective_fee_bps(EffectiveFeeArgs {
+			creator_fee_bps: market.creator_fee_bps,
+			created_at: market.created_at,
+			now: market.landing.unix_timestamp,
+		})
 		.ok_or(MarketQuoteError::FeeOutOfRange)?;
 	let amm = AmmInput {
 		quote_reserves: market.quote_reserves,
@@ -79,11 +87,12 @@ mod tests {
 	const BASE_VAULT: u64 = 400_000_000_000;
 	const QUOTE_RESERVES: u64 = 25_000_000_000;
 
+	/// The partner max differs from each pool's rate in the tests.
 	const FEES: DexFees = DexFees {
 		creation_fee_cents: 0,
 		protocol_fee_bps: 80,
 		lp_fee_bps: 30,
-		creator_fee_bps: 40,
+		max_creator_fee_bps: 100,
 		fee_decay_seconds: 0,
 		fee_decay_start_bps: 0,
 	};
@@ -100,6 +109,7 @@ mod tests {
 		created_at: 0,
 		fees: &FEES,
 		landing: LANDING,
+		creator_fee_bps: 40,
 	};
 
 	const fn priced(amount: u64) -> AmmInput {
@@ -196,6 +206,62 @@ mod tests {
 			.unwrap();
 			assert_eq!(quote, MarketQuote::sold(&sell, 150));
 			assert!(!quote.supply_capped);
+		}
+	}
+
+	/// A pool's rate can be above the partner max. A partner can lower its max
+	/// after the pool's creation.
+	#[test]
+	fn the_pools_creator_rate_prices_the_trade_not_the_partner_max() {
+		let decaying = DexFees {
+			fee_decay_seconds: 12,
+			fee_decay_start_bps: 5_000,
+			..FEES
+		};
+		let buy = QuoteRequest {
+			direction: TradeDirection::Buy,
+			mode: TradeMode::ExactIn,
+			amount: 1_000_000_000,
+		};
+		// `(fee_bps, fee, out_amount)` past the decay window, then halfway
+		// through it.
+		for (creator_fee_bps, standard, halfway) in [
+			(
+				0,
+				(110, 11_000_000, 15_221_824_618),
+				(1_333, 133_300_000, 13_402_560_048),
+			),
+			(
+				40,
+				(150, 15_000_000, 15_162_593_804),
+				(1_363, 136_300_000, 13_357_717_573),
+			),
+			(
+				160,
+				(270, 27_000_000, 14_984_791_899),
+				(1_453, 145_300_000, 13_223_127_709),
+			),
+		] {
+			let market = PoolMarket {
+				creator_fee_bps,
+				fees: &decaying,
+				..MARKET
+			};
+			let past = quote(&market, buy).unwrap();
+			assert_eq!((past.fee_bps, past.fee, past.out_amount), standard);
+
+			let inside = quote(
+				&PoolMarket {
+					created_at: NOW - 6,
+					..market
+				},
+				buy,
+			)
+			.unwrap();
+			assert_eq!(
+				(inside.fee_bps, inside.fee, inside.out_amount),
+				halfway
+			);
 		}
 	}
 

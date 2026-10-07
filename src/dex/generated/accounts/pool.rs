@@ -50,11 +50,7 @@ pub struct Pool {
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
 	)]
 	pub coin_creator: Address,
-	#[cfg_attr(
-		feature = "serde",
-		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
-	)]
-	pub creator_fee_config: Address,
+	pub padding0: [u64; 4],
 	#[cfg_attr(
 		feature = "serde",
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
@@ -110,17 +106,19 @@ pub struct Pool {
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
 	)]
 	pub platform_config: Address,
+	pub creator_fee_mode: u8,
+	pub creator_fee_bps: u16,
 	#[cfg_attr(
 		feature = "serde",
 		serde(with = "serde_with::As::<serde_with::Bytes>")
 	)]
-	pub reserved: [u8; 64],
+	pub reserved: [u8; 256],
 }
 
 pub const POOL_DISCRIMINATOR: [u8; 8] = [241, 154, 109, 4, 17, 177, 109, 188];
 
 impl Pool {
-	pub const LEN: usize = 389;
+	pub const LEN: usize = 584;
 
 	#[inline(always)]
 	pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {

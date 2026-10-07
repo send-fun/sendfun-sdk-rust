@@ -34,7 +34,7 @@ pub struct DexFees {
 	pub creation_fee_cents: u64,
 	pub protocol_fee_bps: u16,
 	pub lp_fee_bps: u16,
-	pub creator_fee_bps: u16,
+	pub max_creator_fee_bps: u16,
 	pub fee_decay_seconds: u16,
 	pub fee_decay_start_bps: u16,
 }

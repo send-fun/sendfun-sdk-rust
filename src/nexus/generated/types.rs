@@ -21,13 +21,11 @@
 //!
 
 pub(crate) mod r#auth_platform_entry;
-pub(crate) mod r#caller_type;
 pub(crate) mod r#dex_fees;
 pub(crate) mod r#fee_config;
 pub(crate) mod r#launchpad_fees;
 
 pub use self::r#auth_platform_entry::*;
-pub use self::r#caller_type::*;
 pub use self::r#dex_fees::*;
 pub use self::r#fee_config::*;
 pub use self::r#launchpad_fees::*;

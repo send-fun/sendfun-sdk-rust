@@ -635,7 +635,7 @@ mod tests {
 			quote_mint: WSOL_MINT,
 			user: Address::new_from_array([6u8; 32]),
 			coin_creator: Address::new_from_array([7u8; 32]),
-			creator_fee_config: Address::new_from_array([8u8; 32]),
+			padding0: [0; 4],
 			platform_config: PLATFORM_CONFIG,
 			base_amount: 0,
 			quote_amount_gross: 0,
@@ -651,6 +651,8 @@ mod tests {
 			base_reserves: 400_000_000_000,
 			quote_reserves: 25_000_000_000,
 			timestamp: 0,
+			creator_fee_mode: 0,
+			creator_fee_bps: 0,
 		};
 
 		let (ix, quote) = sell_exact_in(&SellExactInParams {

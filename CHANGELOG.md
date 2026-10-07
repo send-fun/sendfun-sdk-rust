@@ -1,5 +1,50 @@
 # Changelog
 
+## 3.0.0
+
+### Features
+
+- launchpad: Add `creator_fee_mode`, `creator_fee_bps` and `dex_creator_fee_bps` to `BondingCurve`.
+- dex: Add `creator_fee_mode` and `creator_fee_bps` to `Pool`.
+- nexus: Add `allowed_creator_fee_modes` to `PartnerConfig`.
+- launchpad, dex: Add `pda::find_creator_fee_config_pda` and `pda::create_creator_fee_config_pda`.
+- launchpad, dex: Add `creator_fee_mode` and `creator_fee_bps` to `TradeEvent`, `TokenCreateEvent` and `PoolCreateEvent`.
+- launchpad: Add `dex_creator_fee_bps` to `TokenCreateEvent`.
+- launchpad, dex, nexus: Add the errors `CreatorFeeTooHigh` and `CreatorFeeModeNotAllowed`.
+
+### Fixes
+
+- transfer_hook: Do not refuse a read-only hook account that is `user` or the market.
+
+### Breaking
+
+- launchpad: Remove `creator_platform` and `creator_id` from `BuildCreateTokenParams`.
+- launchpad: Add `creator_fee_mode`, `creator_fee_bps` and `dex_creator_fee_bps` to `BuildCreateTokenParams`.
+- launchpad: Remove `creator_platform`, `creator_id` and `creator_hash` from `CreateTokenInstructionArgs`.
+- launchpad: Add `creator_fee_mode`, `creator_fee_bps` and `dex_creator_fee_bps` to `CreateTokenInstructionArgs`.
+- launchpad: Remove `creator_fee_config` from `BuildMigrateParams` and `MigrateBuilder::new`.
+- launchpad, dex: Remove `creator_fee_config` from `ClaimCreatorFeesBuilder::new`.
+- launchpad: Add the `dex_creator_fee_config` account to `migrate`.
+- launchpad, dex: Change the `creator_fee_config` account to the PDA from `pda::find_creator_fee_config_pda`.
+- launchpad, dex: Make `creator_fee_config` writable in `claim_creator_fees` and `migrate`.
+- launchpad, dex: Add `creator_fee_bps` to `CurveMarket` and `PoolMarket`.
+- launchpad, dex: Replace `creator_fee_config` with `padding0` in `BondingCurve`, `Pool` and the events.
+- launchpad, dex: Remove `creator_platform` and `creator_id` from `TokenCreateEvent`.
+- launchpad: Increase `BondingCurve::LEN` from 421 to 618.
+- dex: Increase `Pool::LEN` from 389 to 584.
+- nexus: Increase `PartnerConfig::LEN` from 173 to 399.
+- nexus: Increase `UserRewardDebt::LEN` from 182 to 214.
+- nexus: Increase `UserStakePosition::LEN` from 120 to 216.
+- nexus: Increase `reserved` in `FeePreset` from 32 to 64 bytes.
+- nexus: Rename `creator_fee_bps` to `max_creator_fee_bps` in `LaunchpadFees` and `DexFees`.
+- nexus: Add the `creator_fee_bps` argument to `total_fee_bps`.
+- nexus: Change `effective_fee_bps` to take `EffectiveFeeArgs`.
+- nexus: Remove `CreatorFeeConfig`, `CallerType` and the `creator_fee_config` PDA helpers.
+- utils: Remove `creator_hash`, `creator_hash_from_id`, `encode_creator_id` and `decode_creator_id`.
+- launchpad, dex, nexus: Rename `InvalidCreatorId` to `Unused7012`.
+- dex: Rename `InvalidCreatorHash` to `InvalidCoinCreator`.
+- transfer_hook: Remove `Clash::SignerNotForwarded`.
+
 ## 2.0.1
 
 The SDK has no RPC client. Fetch accounts with your own client, then decode

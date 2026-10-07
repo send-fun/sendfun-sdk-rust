@@ -51,14 +51,19 @@ pub struct PartnerConfig {
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
 	)]
 	pub platform_config: Address,
-	pub reserved: [u8; 32],
+	pub allowed_creator_fee_modes: u16,
+	#[cfg_attr(
+		feature = "serde",
+		serde(with = "serde_with::As::<serde_with::Bytes>")
+	)]
+	pub reserved: [u8; 256],
 }
 
 pub const PARTNER_CONFIG_DISCRIMINATOR: [u8; 8] =
 	[212, 110, 106, 253, 66, 131, 77, 96];
 
 impl PartnerConfig {
-	pub const LEN: usize = 173;
+	pub const LEN: usize = 399;
 
 	#[inline(always)]
 	pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {

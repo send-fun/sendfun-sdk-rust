@@ -121,7 +121,6 @@ pub enum Unresolvable {
 	/// A PDA has more than 15 seeds. The bump is the 16th.
 	TooManySeeds,
 	SeedTooLong,
-	/// An extra must sign. The programs do not pass a signer to the hook.
 	ExtraSigns,
 	/// A seed reads the transfer amount. The program sets the amount of one leg
 	/// during the swap.
@@ -164,9 +163,8 @@ impl fmt::Display for Unresolvable {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Clash {
-	SignerNotForwarded,
 	/// The hook repeats an account of the trade, and one copy is writable. A
-	/// swap with it fails.
+	/// swap with it fails. A read-only hook repeat of the market is not a clash.
 	WritableDuplicate,
 	ExtraUnresolved,
 }
@@ -174,9 +172,6 @@ pub enum Clash {
 impl fmt::Display for Clash {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.write_str(match self {
-			Self::SignerNotForwarded => {
-				"transfer hook needs a signer the programs do not forward"
-			}
 			Self::WritableDuplicate => {
 				"transfer hook repeats an account of the trade, writable"
 			}
@@ -750,18 +745,29 @@ impl MarketHooks {
 				),
 			],
 		};
-		trailing_accounts(&legs, fixed, unloaded)
+		let own = TradeOwn {
+			fixed,
+			market: &trade.market,
+		};
+		trailing_accounts(&legs, &own, unloaded)
 	}
 }
 
-/// Refuses a hook account that repeats a trade signer. The programs do not
-/// pass the signer to the hook. Refuses a hook account that repeats a trade
-/// account when either copy is writable. The swap fails in both cases.
+/// The trade's own accounts, which a hook account may repeat.
+struct TradeOwn<'a> {
+	fixed: &'a [AccountMeta],
+	/// A read-only hook repeat of the market is not a clash.
+	market: &'a Address,
+}
+
+/// Refuses a hook account that repeats a trade account when either copy is
+/// writable. A read-only hook repeat of the market passes.
 fn trailing_accounts(
 	legs: &[(Option<&Hook>, Leg)],
-	fixed: &[AccountMeta],
+	own: &TradeOwn<'_>,
 	unloaded: Unloaded,
 ) -> Result<Vec<AccountMeta>, HookError> {
+	let TradeOwn { fixed, market } = *own;
 	let mut merged: Vec<AccountMeta> = Vec::new();
 	for (hook, leg) in legs {
 		let Some(hook) = hook else {
@@ -771,10 +777,10 @@ fn trailing_accounts(
 			if let Some(clash) =
 				fixed.iter().find(|account| account.pubkey == meta.pubkey)
 			{
-				if clash.is_signer {
-					return Err(HookError::Clash(Clash::SignerNotForwarded));
-				}
-				if clash.is_writable || meta.is_writable {
+				let forwarded_read_only = meta.pubkey == *market;
+				if meta.is_writable
+					|| (clash.is_writable && !forwarded_read_only)
+				{
 					return Err(HookError::Clash(Clash::WritableDuplicate));
 				}
 			}

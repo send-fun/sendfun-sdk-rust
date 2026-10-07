@@ -1,6 +1,7 @@
 use crate::math::amm::{
 	self, AmmError, AmmInput, BuyArgs, QuoteError, SellArgs,
 };
+use crate::nexus::EffectiveFeeArgs;
 use crate::nexus::types::LaunchpadFees;
 use crate::utils::{
 	Landing, MarketQuote, MarketQuoteError, QuoteRequest, TradeDirection,
@@ -15,9 +16,12 @@ pub struct CurveMarket<'a> {
 	pub real_quote_reserves: u64,
 	pub created_at: i64,
 	/// `PartnerConfig.launchpad` of the trade's partner on the curve's
-	/// platform.
+	/// platform. It sets the protocol rate and the decay.
 	pub fees: &'a LaunchpadFees,
 	pub landing: Landing,
+	/// `BondingCurve.creator_fee_bps`, not the partner's
+	/// `max_creator_fee_bps`.
+	pub creator_fee_bps: u16,
 }
 
 /// Calculates a trade on a bonding curve. The price comes from the virtual
@@ -32,7 +36,11 @@ pub fn quote(
 	}
 	let fee_bps = market
 		.fees
-		.effective_fee_bps(market.created_at, market.landing.unix_timestamp)
+		.effective_fee_bps(EffectiveFeeArgs {
+			creator_fee_bps: market.creator_fee_bps,
+			created_at: market.created_at,
+			now: market.landing.unix_timestamp,
+		})
 		.ok_or(MarketQuoteError::FeeOutOfRange)?;
 	let amm = AmmInput {
 		quote_reserves: market.virtual_quote_reserves,
@@ -92,10 +100,11 @@ mod tests {
 	const NOW: i64 = 1_000;
 	const ONE_SOL: u64 = 1_000_000_000;
 
+	/// The partner max differs from each curve's rate in the tests.
 	const FEES: LaunchpadFees = LaunchpadFees {
 		creation_fee_cents: 0,
 		protocol_fee_bps: 100,
-		creator_fee_bps: 0,
+		max_creator_fee_bps: 50,
 		fee_decay_seconds: 0,
 		fee_decay_start_bps: 0,
 	};
@@ -114,6 +123,7 @@ mod tests {
 		created_at: 0,
 		fees: &FEES,
 		landing: LANDING,
+		creator_fee_bps: 0,
 	};
 
 	const BASE_100_BPS: MintFee = MintFee {
@@ -177,6 +187,58 @@ mod tests {
 			),
 			Err(MarketQuoteError::FeeOutOfRange)
 		);
+	}
+
+	/// A curve's rate can be above the partner max. A partner can lower its max
+	/// after the curve's creation.
+	#[test]
+	fn the_curves_creator_rate_prices_the_trade_not_the_partner_max() {
+		let decaying = LaunchpadFees {
+			fee_decay_seconds: 12,
+			fee_decay_start_bps: 5_000,
+			..FEES
+		};
+		let buy = request(TradeDirection::Buy, TradeMode::ExactIn, ONE_SOL);
+		// `(fee_bps, fee, out_amount)` past the decay window, then halfway
+		// through it.
+		for (creator_fee_bps, standard, halfway) in [
+			(
+				0,
+				(100, 10_000_000, 31_945_788_964_181),
+				(1_325, 132_500_000, 28_103_992_872_762),
+			),
+			(
+				30,
+				(130, 13_000_000, 31_852_066_995_836),
+				(1_348, 134_800_000, 28_031_569_534_621),
+			),
+			(
+				80,
+				(180, 18_000_000, 31_695_823_381_318),
+				(1_385, 138_500_000, 27_915_039_774_476),
+			),
+		] {
+			let market = CurveMarket {
+				creator_fee_bps,
+				fees: &decaying,
+				..MARKET
+			};
+			let past = quote(&market, buy).unwrap();
+			assert_eq!((past.fee_bps, past.fee, past.out_amount), standard);
+
+			let inside = quote(
+				&CurveMarket {
+					created_at: NOW - 6,
+					..market
+				},
+				buy,
+			)
+			.unwrap();
+			assert_eq!(
+				(inside.fee_bps, inside.fee, inside.out_amount),
+				halfway
+			);
+		}
 	}
 
 	#[test]

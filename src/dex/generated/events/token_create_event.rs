@@ -56,13 +56,7 @@ pub struct TokenCreateEvent {
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
 	)]
 	pub coin_creator: Address,
-	pub creator_platform: String,
-	pub creator_id: String,
-	#[cfg_attr(
-		feature = "serde",
-		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
-	)]
-	pub creator_fee_config: Address,
+	pub padding0: [u64; 5],
 	#[cfg_attr(
 		feature = "serde",
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
@@ -97,6 +91,8 @@ pub struct TokenCreateEvent {
 		serde(with = "serde_with::As::<serde_with::DisplayFromStr>")
 	)]
 	pub timestamp: i64,
+	pub creator_fee_mode: u8,
+	pub creator_fee_bps: u16,
 }
 
 pub const TOKEN_CREATE_EVENT_DISCRIMINATOR: [u8; 8] =

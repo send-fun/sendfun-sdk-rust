@@ -21,7 +21,6 @@
 //!
 
 pub(crate) mod r#alt_registry;
-pub(crate) mod r#creator_fee_config;
 pub(crate) mod r#fee_preset;
 pub(crate) mod r#global_config;
 pub(crate) mod r#partner_config;
@@ -32,7 +31,6 @@ pub(crate) mod r#user_reward_debt;
 pub(crate) mod r#user_stake_position;
 
 pub use self::r#alt_registry::*;
-pub use self::r#creator_fee_config::*;
 pub use self::r#fee_preset::*;
 pub use self::r#global_config::*;
 pub use self::r#partner_config::*;
